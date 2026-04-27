@@ -1,0 +1,12 @@
+name: gene-scout
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - minimap2
+  - macse
+  - emboss
+  - seqkit
+  - biopython
+  - python>=3.9
+``
