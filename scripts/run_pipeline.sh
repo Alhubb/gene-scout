@@ -206,6 +206,18 @@ python "$SCRIPTS/merge_mutation_evidence.py" \
   "$STOP_GENES" \
   > "${BASE}/mutation_final_evidence.tsv"
 
+if [ -n "${MUTATION_LIST:-}" ]; then
+    echo "Screening for predefined mutations"
+    python "$SCRIPTS/screen_mutations.py" \
+        --mutations "$MUTATION_LIST" \
+        --macse "$BASE/mutation_cds_macse_strict_summary.tsv" \
+        --frameshifts "$BASE/frameshifts.tsv" \
+        --stops "$BASE/stop_genes.tsv" \
+        > "$BASE/mutation_screen_results.tsv"
+else
+    echo "No mutation list supplied; discovery mode only"
+fi
+
 echo
 echo "✅ MUTATION PIPELINE COMPLETE"
 echo "➡ Output: ${BASE}/mutation_final_evidence.tsv"
