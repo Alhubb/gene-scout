@@ -101,6 +101,18 @@ gene-scout \
   --out results/
 ```
 
+### Screening for predefined mutations
+
+To screen a genome dataset for a user-defined list of mutations
+(e.g. derived from Snippy), provide a mutation list:
+
+```bash
+gene-scout \
+  --genomes genomes/ \
+  --ancestors WT_gene_fasta/ \
+  --mutations mutations.tsv \
+  --out results/
+```
 ---
 
 ## Arguments
