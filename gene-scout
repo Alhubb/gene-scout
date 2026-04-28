@@ -54,4 +54,3 @@ bash "$SCRIPTS/run_pipeline.sh"
 echo ""
 echo "✅ GENE-SCOUT COMPLETE"
 echo "➡ Results in: $BASE"
-``
