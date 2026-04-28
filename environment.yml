@@ -9,4 +9,3 @@ dependencies:
   - seqkit
   - biopython
   - python>=3.9
-``
