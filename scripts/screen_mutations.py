@@ -6,7 +6,11 @@ import sys
 
 
 def read_macse_hits(macse_file):
-
+    """
+    Return a set of (gene, aa_start, aa_end, mutation_type) tuples.
+    Column names must match scan_mutations_cds_macse.py output:
+    gene, aa_start, aa_end, mutation_type.
+    """
     hits = set()
     try:
         with open(macse_file) as fh:
@@ -15,9 +19,9 @@ def read_macse_hits(macse_file):
                 try:
                     key = (
                         row["gene"],
-                        int(row["start"]),
-                        int(row["end"]),
-                        row["type"],
+                        int(row["aa_start"]),
+                        int(row["aa_end"]),
+                        row["mutation_type"],
                     )
                     hits.add(key)
                 except (KeyError, ValueError):
@@ -35,7 +39,7 @@ def read_frameshift_genes(path):
             for line in fh:
                 line = line.strip()
                 if line:
-                    # Accept single-column or two-column (filename TAB gene)
+                    # Two-column format: paf_path TAB gene_name
                     parts = line.split("\t")
                     genes.add(parts[-1].strip())
     except FileNotFoundError:
@@ -44,7 +48,11 @@ def read_frameshift_genes(path):
 
 
 def read_stop_pairs(path):
-
+    """
+    Read stop_genes.tsv — three columns: gene_name  isolate_id  event_type.
+    Returns a set of (gene_name, event_type) tuples.
+    event_type is normalised to 'stop_gained' or 'stop_lost'.
+    """
     pairs = set()
     _normalise = {
         "stop_gain":   "stop_gained",
@@ -58,11 +66,12 @@ def read_stop_pairs(path):
                 line = line.strip()
                 if not line:
                     continue
-                parts = line.split("\t", maxsplit=1)
-                if len(parts) < 2:
+                parts = line.split("\t")
+                if len(parts) < 3:
                     continue
-                event = _normalise.get(parts[1].strip(), parts[1].strip())
-                pairs.add((parts[0].strip(), event))
+                gene  = parts[0].strip()
+                event = _normalise.get(parts[2].strip(), parts[2].strip())
+                pairs.add((gene, event))
     except FileNotFoundError:
         print(f"WARNING: {path} not found", file=sys.stderr)
     return pairs
@@ -95,10 +104,10 @@ def main(args):
             reader = csv.DictReader(fh, delimiter="\t")
             for lineno, row in enumerate(reader, start=2):
                 try:
-                    gene      = row["gene"]
-                    aa_start  = int(row["aa_start"])
-                    aa_end    = int(row["aa_end"])
-                    mut_type  = row["mutation_type"]
+                    gene     = row["gene"]
+                    aa_start = int(row["aa_start"])
+                    aa_end   = int(row["aa_end"])
+                    mut_type = row["mutation_type"]
                 except (KeyError, ValueError) as e:
                     print(
                         f"WARNING: skipping malformed row {lineno} in "
@@ -109,7 +118,6 @@ def main(args):
 
                 norm_type = normalise_stop_type(mut_type)
 
-                # MACSE match: compare against (gene, start, end, type)
                 macse_key    = (gene, aa_start, aa_end, mut_type)
                 macse_strict = int(macse_key in macse_hits)
 
@@ -117,9 +125,10 @@ def main(args):
                     mut_type == "frameshift" and gene in frameshift_genes
                 )
 
+                # Direct set lookup — pairs are (gene_name, event_type)
                 stop_confirmed = int(
                     norm_type in ("stop_gained", "stop_lost")
-                    and any(iso == gene and evt == norm_type for iso, evt in stop_pairs)
+                    and (gene, norm_type) in stop_pairs
                 )
 
                 final = int(bool(macse_strict or minimap2_fs or stop_confirmed))
@@ -140,6 +149,6 @@ if __name__ == "__main__":
     parser.add_argument("--mutations",   required=True, help="Mutation list TSV (gene, aa_start, aa_end, mutation_type)")
     parser.add_argument("--macse",       required=True, help="MACSE mutation summary TSV")
     parser.add_argument("--frameshifts", required=True, help="Frameshift gene list TSV")
-    parser.add_argument("--stops",       required=True, help="Stop mutation TSV (isolate_id, event_type)")
+    parser.add_argument("--stops",       required=True, help="Stop mutation TSV (gene_name, isolate_id, event_type)")
     parser.add_argument("--output",      default=None,  help="Output file (default: stdout)")
     main(parser.parse_args())
