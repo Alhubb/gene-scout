@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-
 import sys
 
 
 def read_macse_genes(path):
-
     genes = set()
     try:
         with open(path) as fh:
-            header = fh.readline()  # skip header
+            fh.readline()  # skip header
             for lineno, line in enumerate(fh, start=2):
                 line = line.strip()
                 if not line:
@@ -27,7 +25,6 @@ def read_macse_genes(path):
 
 
 def read_frameshift_genes(path):
-
     genes = set()
     try:
         with open(path) as fh:
@@ -36,7 +33,7 @@ def read_frameshift_genes(path):
                 if not line:
                     continue
                 parts = line.split("\t")
-                # Accept both single-column and two-column (filename TAB gene) formats
+                # Two-column format: paf_path TAB gene_name
                 gene = parts[-1].strip()
                 if gene:
                     genes.add(gene)
@@ -46,49 +43,46 @@ def read_frameshift_genes(path):
 
 
 def read_stop_genes(path):
-
-    stops = set()
+    """
+    Read stop_genes.tsv — three columns: gene_name  isolate_id  event_type.
+    Returns a set of gene names that have any stop event.
+    Column 0 is the gene name, written by detect_stop_mutations.py.
+    """
+    genes = set()
     try:
         with open(path) as fh:
             for lineno, line in enumerate(fh, start=1):
                 line = line.strip()
                 if not line:
                     continue
-                parts = line.split("\t", maxsplit=1)
-                if len(parts) < 2:
+                parts = line.split("\t")
+                if len(parts) < 3:
                     print(
-                        f"WARNING: {path} line {lineno} missing event type, skipping",
+                        f"WARNING: {path} line {lineno} has fewer than 3 fields, skipping",
                         file=sys.stderr,
                     )
                     continue
-                stops.add((parts[0].strip(), parts[1].strip()))
+                genes.add(parts[0].strip())
     except FileNotFoundError:
         print(f"WARNING: {path} not found — stop evidence will be absent", file=sys.stderr)
-    return stops
+    return genes
 
 
 def main(macse_path, frameshift_path, stop_path):
-    macse_genes     = read_macse_genes(macse_path)
+    macse_genes      = read_macse_genes(macse_path)
     frameshift_genes = read_frameshift_genes(frameshift_path)
-    stop_pairs      = read_stop_genes(stop_path)
+    stop_genes       = read_stop_genes(stop_path)
 
-    # Collect all gene names that appear in any evidence source.
-    # For stops we use the isolate ID as the key (matches what
-    # detect_stop_mutations.py writes), so we report at isolate level.
-    all_keys = set()
-    all_keys.update(macse_genes)
-    all_keys.update(frameshift_genes)
-    all_keys.update(iso for iso, _ in stop_pairs)
+    all_genes = macse_genes | frameshift_genes | stop_genes
 
     print("gene\tmacse\tframeshift\tstop\tfinal")
 
-    for key in sorted(all_keys):
-        m = int(key in macse_genes)
-        f = int(key in frameshift_genes)
-        # Stop: flag if this isolate/gene appears in any stop event
-        s = int(any(iso == key for iso, _ in stop_pairs))
+    for gene in sorted(all_genes):
+        m     = int(gene in macse_genes)
+        f     = int(gene in frameshift_genes)
+        s     = int(gene in stop_genes)
         final = int(bool(m or f or s))
-        print(f"{key}\t{m}\t{f}\t{s}\t{final}")
+        print(f"{gene}\t{m}\t{f}\t{s}\t{final}")
 
 
 if __name__ == "__main__":
