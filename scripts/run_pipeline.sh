@@ -28,6 +28,10 @@ FINAL_OUT="${BASE}/mutation_final_evidence.tsv"
 
 SCRIPTS="$(dirname "$(realpath "$0")")"
 
+# FIX: respect THREADS environment variable (default 4) so users can
+# control parallelism without editing the script.
+THREADS="${THREADS:-4}"
+
 ###############################################################################
 # STEP 1 — BUILD PER-GENE FASTAs
 ###############################################################################
@@ -44,13 +48,8 @@ for dir in "$EXTRACTED"/*_minimap_hits; do
 
     name=$(basename "$dir")
     core="${name%_minimap_hits}"
-
-    # FIX: split on LAST underscore, not first.
-    # Original: gene="${core%%_*}" / lineage="${core#*_}"
-    # This silently truncates gene names that contain an underscore.
-    # Splitting on the last underscore keeps multi-part names intact.
-    lineage="${core##*_}"   # e.g. 34
-    gene="${core%_*}"       # e.g. cyaA
+    lineage="${core##*_}"
+    gene="${core%_*}"
 
     wt_fasta="${WT_GENES}/${gene}_${lineage}.fasta"
     out_fasta="${PER_GENE_FASTAS}/${gene}_${lineage}.fasta"
@@ -112,7 +111,7 @@ echo "==============================="
 mkdir -p "$MACSE_OUT"
 
 find "$PER_GENE_FASTAS_DEDUP" -name "*.fasta" -print0 | \
-xargs -0 -r -n 1 -P 4 bash -c '
+xargs -0 -r -n 1 -P "$THREADS" bash -c '
     set -o noglob
     f="$1"
     base=$(basename "$f" .fasta)
@@ -158,7 +157,7 @@ for dir in "$MINIMAP_OUT"/*_minimap_hits; do
 
     dirname=$(basename "$dir")
     core="${dirname%_minimap_hits}"
-    gene="${core%_*}"   # underscore-safe: split on last _
+    gene="${core%_*}"
 
     for paf in "$dir"/*.paf; do
         [ -f "$paf" ] || continue
@@ -183,9 +182,7 @@ for dir in "$MINIMAP_OUT"/*_minimap_hits; do
     done
 done
 
-# Deduplicate (same gene may appear from multiple PAF alignments)
 sort -u "$FRAMESHIFTS" -o "$FRAMESHIFTS"
-
 echo "✅ Frameshifts written to $FRAMESHIFTS"
 
 ###############################################################################
@@ -205,9 +202,10 @@ for f in "$PER_GENE_FASTAS"/*.fasta; do
         >> "${STOP_CALLS}/stop_calls.tsv"
 done
 
-# stop_calls.tsv format: isolate_id <tab> event_type
-# Deduplicate and write to STOP_GENES
-awk 'NF >= 2 { print $1 "\t" $2 }' "${STOP_CALLS}/stop_calls.tsv" \
+# FIX: detect_stop_mutations.py outputs three columns:
+# gene_name  isolate_id  event_type
+# Pass all three through — merge_mutation_evidence.py requires NF >= 3.
+awk 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' "${STOP_CALLS}/stop_calls.tsv" \
     | sort -u > "$STOP_GENES"
 
 echo "✅ Stop mutations written to $STOP_GENES"
