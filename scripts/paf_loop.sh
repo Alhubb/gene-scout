@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -euo pipefail
 
 : "${BASE:?Need BASE}"
@@ -16,28 +17,51 @@ for dir in "$PAF_BASE"/*_minimap_hits; do
     name=$(basename "$dir")
     core="${name%_minimap_hits}"
 
-    gene="${core%%_*}"
-    lineage="${core#*_}"
+    lineage="${core##*_}"   # everything after the last _  → e.g. 34
+    gene="${core%_*}"       # everything before the last _ → e.g. cyaA
 
     outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
     mkdir -p "$outdir"
 
+    echo "=== Processing $name (gene=$gene lineage=$lineage) ==="
+
+    paf_count=0
     for paf in "$dir"/*.paf; do
+        [ -f "$paf" ] || continue
+        paf_count=$((paf_count + 1))
+
         asm=$(basename "$paf" .paf)
 
+        # Resolve assembly path — try extensions in order
+        genome=""
         for ext in fna fasta fna.gz; do
-            genome="${GENOME_FASTA_DIR}/${asm}.${ext}"
-            [ -f "$genome" ] && break
+            candidate="${GENOME_FASTA_DIR}/${asm}.${ext}"
+            if [ -f "$candidate" ]; then
+                genome="$candidate"
+                break
+            fi
         done
 
-        [ -f "$genome" ] || continue
+        if [ -z "$genome" ]; then
+            echo "WARNING: Assembly not found for $asm, skipping"
+            continue
+        fi
 
         out_fasta="${outdir}/${asm}.bakta.${gene}.fasta"
 
-        zcat -f "$genome" | \
         python "$SCRIPTS/extract_gene_from_paf.py" \
-            "$paf" /dev/stdin "$out_fasta"
+            "$paf" \
+            "$genome" \
+            "$out_fasta"
 
-        [ -s "$out_fasta" ] || rm -f "$out_fasta"
+        if [ ! -s "$out_fasta" ]; then
+            echo "  Skipping empty extraction for $asm"
+            rm -f "$out_fasta"
+        fi
     done
+
+    if [ "$paf_count" -eq 0 ]; then
+        echo "WARNING: No .paf files found in $dir"
+    fi
+
 done
