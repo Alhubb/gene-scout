@@ -6,7 +6,16 @@ usage() {
     echo "GENE-SCOUT: Gene-centric mutation detection pipeline"
     echo ""
     echo "Usage:"
-    echo "  gene-scout --genomes DIR --ancestors DIR --out DIR"
+    echo "  gene-scout --genomes DIR --ancestors DIR --out DIR [--mutations TSV]"
+    echo ""
+    echo "Required:"
+    echo "  --genomes    DIR   Directory of genome assemblies (.fna / .fasta / .fna.gz)"
+    echo "  --ancestors  DIR   Directory of ancestral gene CDS FASTA files"
+    echo "  --out        DIR   Output directory"
+    echo ""
+    echo "Optional:"
+    echo "  --mutations  TSV   Mutation list TSV (gene, aa_start, aa_end, mutation_type)"
+    echo "                     If supplied, runs screen_mutations.py against evidence"
     echo ""
     exit 1
 }
@@ -14,6 +23,7 @@ usage() {
 GENOMES=""
 ANCESTORS=""
 OUT=""
+MUTATIONS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,7 +45,7 @@ done
 export BASE="$(realpath "$OUT")"
 export GENOME_FASTA_DIR="$(realpath "$GENOMES")"
 export WT_GENES="$(realpath "$ANCESTORS")"
-export MUTATION_LIST="${MUTATIONS:-}"
+export MUTATION_LIST="${MUTATIONS}"
 
 SCRIPTS="$(dirname "$(realpath "$0")")/scripts"
 
@@ -52,5 +62,5 @@ echo "Running mutation detection pipeline"
 bash "$SCRIPTS/run_pipeline.sh"
 
 echo ""
-echo "✅ GENE-SCOUT COMPLETE"
-echo "➡ Results in: $BASE"
+echo "GENE-SCOUT COMPLETE"
+echo "Results in: $BASE"
