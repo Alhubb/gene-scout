@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-
 import sys
+import os
 from Bio import SeqIO
 from Bio.Seq import Seq
 
-
 def translate_nt(nt_str):
-
     seq = nt_str.upper().replace("-", "").replace("!", "")
     remainder = len(seq) % 3
     if remainder:
         seq = seq[:-remainder]
     return str(Seq(seq).translate(table=11))
 
-
 def main(nt_fasta):
     records = list(SeqIO.parse(nt_fasta, "fasta"))
     if len(records) < 2:
         return
+        
+    gene = os.path.basename(nt_fasta)
+    gene = gene.replace(".fasta", "").replace(".fna", "")
+    gene = gene.rsplit("_", 1)[0]
 
     wt_aa = translate_nt(str(records[0].seq))
     wt_stop_pos = wt_aa.find("*")
@@ -29,13 +30,11 @@ def main(nt_fasta):
         stop_pos = aa.find("*")
 
         if stop_pos != -1 and stop_pos < wt_stop_pos:
-            # FIX: print rec.id (the isolate) not wt.id
-            print(f"{rec.id}\tstop_gained")
+            print(f"{gene}\t{rec.id}\tstop_gained")
             continue
 
         if stop_pos == -1 or stop_pos > wt_stop_pos:
-            print(f"{rec.id}\tstop_lost")
-
+            print(f"{gene}\t{rec.id}\tstop_lost")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
