@@ -1,4 +1,16 @@
 #!/bin/bash
+# minimap_loop.sh
+# Aligns each WT gene CDS against all genome assemblies, producing PAF files.
+#
+# Required environment variables:
+#   BASE              — project root directory
+#   GENOME_FASTA_DIR  — directory containing genome FASTA files (.fna / .fasta / .fna.gz)
+#   WT_GENES          — directory containing WT gene CDS FASTA files
+#
+# Usage:
+#   export BASE=... GENOME_FASTA_DIR=... WT_GENES=...
+#   bash minimap_loop.sh
+
 set -euo pipefail
 
 : "${BASE:?Need BASE}"
@@ -10,19 +22,27 @@ mkdir -p "$OUTBASE"
 
 for gene in "$WT_GENES"/*.fasta "$WT_GENES"/*.fna; do
     [ -f "$gene" ] || continue
+
     gene_base=$(basename "$gene")
     gene_base="${gene_base%.*}"
 
     outdir="${OUTBASE}/${gene_base}_minimap_hits"
     mkdir -p "$outdir"
 
-    for g in "$GENOME_FASTA_DIR"/*.fna "$GENOME_FASTA_DIR"/*.fasta "$GENOME_FASTA_DIR"/*.fna.gz; do
+    echo "Processing gene: $gene_base"
+
+    for g in "$GENOME_FASTA_DIR"/*.fna \
+              "$GENOME_FASTA_DIR"/*.fasta \
+              "$GENOME_FASTA_DIR"/*.fna.gz; do
         [ -f "$g" ] || continue
+
         asm=$(basename "$g")
         asm="${asm%.fna.gz}"
         asm="${asm%.fna}"
         asm="${asm%.fasta}"
 
-        minimap2 -x asm5 -c "$g" "$gene" > "${outdir}/${asm}.paf"
+        minimap2 -x asm20 -c "$gene" "$g" > "${outdir}/${asm}.paf"
     done
+
+    echo "Finished gene: $gene_base"
 done
