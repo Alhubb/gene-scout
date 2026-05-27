@@ -1,15 +1,4 @@
 #!/bin/bash
-# minimap_loop.sh
-# Aligns each WT gene CDS against all genome assemblies, producing PAF files.
-#
-# Required environment variables:
-#   BASE              — project root directory
-#   GENOME_FASTA_DIR  — directory containing genome FASTA files (.fna / .fasta / .fna.gz)
-#   WT_GENES          — directory containing WT gene CDS FASTA files
-#
-# Usage:
-#   export BASE=... GENOME_FASTA_DIR=... WT_GENES=...
-#   bash minimap_loop.sh
 
 set -euo pipefail
 
