@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -euo pipefail
 
 ###############################################################################
@@ -19,9 +20,11 @@ PER_GENE_FASTAS="${BASE}/per_gene_fastas"
 PER_GENE_FASTAS_DEDUP="${BASE}/per_gene_fastas_dedup"
 MACSE_OUT="${BASE}/macse_output"
 
-PROTEIN_FASTAS="${BASE}/protein_fastas"
 STOP_CALLS="${BASE}/stop_calls"
 STOP_GENES="${BASE}/stop_genes.tsv"
+FRAMESHIFTS="${BASE}/frameshifts.tsv"
+MACSE_SUMMARY="${BASE}/mutation_cds_macse_strict_summary.tsv"
+FINAL_OUT="${BASE}/mutation_final_evidence.tsv"
 
 SCRIPTS="$(dirname "$(realpath "$0")")"
 
@@ -31,7 +34,7 @@ SCRIPTS="$(dirname "$(realpath "$0")")"
 
 echo
 echo "==============================="
-echo "1️⃣ Building per-gene FASTAs"
+echo "1️⃣  Building per-gene FASTAs"
 echo "==============================="
 
 mkdir -p "$PER_GENE_FASTAS"
@@ -42,8 +45,12 @@ for dir in "$EXTRACTED"/*_minimap_hits; do
     name=$(basename "$dir")
     core="${name%_minimap_hits}"
 
-    gene="${core%%_*}"
-    lineage="${core#*_}"
+    # FIX: split on LAST underscore, not first.
+    # Original: gene="${core%%_*}" / lineage="${core#*_}"
+    # This silently truncates gene names that contain an underscore.
+    # Splitting on the last underscore keeps multi-part names intact.
+    lineage="${core##*_}"   # e.g. 34
+    gene="${core%_*}"       # e.g. cyaA
 
     wt_fasta="${WT_GENES}/${gene}_${lineage}.fasta"
     out_fasta="${PER_GENE_FASTAS}/${gene}_${lineage}.fasta"
@@ -80,7 +87,7 @@ done
 
 echo
 echo "==============================="
-echo "2️⃣ Deduplicating per-gene FASTAs"
+echo "2️⃣  Deduplicating per-gene FASTAs"
 echo "==============================="
 
 mkdir -p "$PER_GENE_FASTAS_DEDUP"
@@ -88,20 +95,18 @@ mkdir -p "$PER_GENE_FASTAS_DEDUP"
 for f in "$PER_GENE_FASTAS"/*.fasta; do
     base=$(basename "$f")
     out="${PER_GENE_FASTAS_DEDUP}/${base}"
-
     seqkit rmdup -s "$f" > "$out"
-
     n=$(grep -c "^>" "$out")
     echo "✅ $base → $n unique CDS variants"
 done
 
 ###############################################################################
-# STEP 3 — MACSE (FRAME-PRESERVING MUTATIONS)
+# STEP 3 — MACSE (CODON-AWARE ALIGNMENT)
 ###############################################################################
 
 echo
 echo "==============================="
-echo "3️⃣ Running MACSE (codon-aware)"
+echo "3️⃣  Running MACSE (codon-aware)"
 echo "==============================="
 
 mkdir -p "$MACSE_OUT"
@@ -126,44 +131,62 @@ xargs -0 -r -n 1 -P 4 bash -c '
 ' _
 
 ###############################################################################
-# STEP 4 — SCAN MACSE ALIGNMENTS
+# STEP 4 — SCAN MACSE ALIGNMENTS FOR MISSENSE / IN-FRAME INDELS
 ###############################################################################
 
 echo
 echo "==============================="
-echo "4️⃣ Scanning MACSE alignments"
+echo "4️⃣  Scanning MACSE alignments"
 echo "==============================="
 
 python "$SCRIPTS/scan_mutations_cds_macse.py" "$MACSE_OUT" \
-  > "${BASE}/mutation_cds_macse_strict_summary.tsv"
+    > "$MACSE_SUMMARY"
 
 ###############################################################################
-# STEP 5 — FRAMESHIFT DETECTION (minimap2 evidence)
+# STEP 5 — FRAMESHIFT DETECTION FROM CIGAR STRINGS
 ###############################################################################
 
 echo
 echo "==============================="
-echo "5️⃣ Detecting frameshifts"
+echo "5️⃣  Detecting frameshifts"
 echo "==============================="
 
-find "$MINIMAP_OUT" -name "*.paf" -exec awk '
-{
-    cigar=""; fs=0
-    for (i=1;i<=NF;i++)
-        if ($i ~ /^cg:Z:/) cigar=substr($i,6)
+> "$FRAMESHIFTS"
 
-    while (match(cigar,/[0-9]+[ID]/)) {
-        n=substr(cigar,RSTART,RLENGTH-1)
-        if (n%3!=0) fs=1
-        cigar=substr(cigar,RSTART+RLENGTH)
-    }
+for dir in "$MINIMAP_OUT"/*_minimap_hits; do
+    [ -d "$dir" ] || continue
 
-    if (fs==1) {
-        split(FILENAME,a,"/")
-        split(a[length(a)-1],b,"_")
-        print b[1]
-    }
-}' {} + | sort -u > "${BASE}/frameshifts.tsv"
+    dirname=$(basename "$dir")
+    core="${dirname%_minimap_hits}"
+    gene="${core%_*}"   # underscore-safe: split on last _
+
+    for paf in "$dir"/*.paf; do
+        [ -f "$paf" ] || continue
+
+        awk -v gene="$gene" -v src="$paf" '
+        {
+            cigar = ""
+            for (i = 1; i <= NF; i++)
+                if ($i ~ /^cg:Z:/) cigar = substr($i, 6)
+            if (cigar == "") next
+
+            fs = 0
+            tmp = cigar
+            while (match(tmp, /[0-9]+[ID]/)) {
+                op  = substr(tmp, RSTART, RLENGTH)
+                n   = substr(op, 1, length(op)-1) + 0
+                if (n % 3 != 0) fs = 1
+                tmp = substr(tmp, RSTART + RLENGTH)
+            }
+            if (fs) print src "\t" gene
+        }' "$paf" >> "$FRAMESHIFTS"
+    done
+done
+
+# Deduplicate (same gene may appear from multiple PAF alignments)
+sort -u "$FRAMESHIFTS" -o "$FRAMESHIFTS"
+
+echo "✅ Frameshifts written to $FRAMESHIFTS"
 
 ###############################################################################
 # STEP 6 — STOP-GAIN / STOP-LOSS
@@ -171,25 +194,23 @@ find "$MINIMAP_OUT" -name "*.paf" -exec awk '
 
 echo
 echo "==============================="
-echo "6️⃣ Detecting stop-gain / stop-loss"
+echo "6️⃣  Detecting stop-gain / stop-loss"
 echo "==============================="
 
-mkdir -p "$PROTEIN_FASTAS" "$STOP_CALLS"
-
+mkdir -p "$STOP_CALLS"
 > "${STOP_CALLS}/stop_calls.tsv"
 
 for f in "$PER_GENE_FASTAS"/*.fasta; do
-    base=$(basename "$f" .fasta)
-
-    transeq -sequence "$f" \
-      -outseq "${PROTEIN_FASTAS}/${base}.faa"
-
-    python "$SCRIPTS/detect_stop_mutations.py" \
-      "${PROTEIN_FASTAS}/${base}.faa" \
-      >> "${STOP_CALLS}/stop_calls.tsv"
+    python "$SCRIPTS/detect_stop_mutations.py" "$f" \
+        >> "${STOP_CALLS}/stop_calls.tsv"
 done
 
-awk '{print $1}' "${STOP_CALLS}/stop_calls.tsv" | sort -u > "$STOP_GENES"
+# stop_calls.tsv format: isolate_id <tab> event_type
+# Deduplicate and write to STOP_GENES
+awk 'NF >= 2 { print $1 "\t" $2 }' "${STOP_CALLS}/stop_calls.tsv" \
+    | sort -u > "$STOP_GENES"
+
+echo "✅ Stop mutations written to $STOP_GENES"
 
 ###############################################################################
 # STEP 7 — FINAL MERGE
@@ -197,28 +218,38 @@ awk '{print $1}' "${STOP_CALLS}/stop_calls.tsv" | sort -u > "$STOP_GENES"
 
 echo
 echo "==============================="
-echo "7️⃣ Final merge"
+echo "7️⃣  Final merge"
 echo "==============================="
 
 python "$SCRIPTS/merge_mutation_evidence.py" \
-  "${BASE}/mutation_cds_macse_strict_summary.tsv" \
-  "${BASE}/frameshifts.tsv" \
-  "$STOP_GENES" \
-  > "${BASE}/mutation_final_evidence.tsv"
+    "$MACSE_SUMMARY" \
+    "$FRAMESHIFTS" \
+    "$STOP_GENES" \
+    > "$FINAL_OUT"
+
+###############################################################################
+# STEP 8 — OPTIONAL MUTATION SCREENING
+###############################################################################
 
 if [ -n "${MUTATION_LIST:-}" ]; then
-    echo "Screening for predefined mutations"
+    echo
+    echo "==============================="
+    echo "8️⃣  Screening predefined mutations"
+    echo "==============================="
+
     python "$SCRIPTS/screen_mutations.py" \
         --mutations "$MUTATION_LIST" \
-        --macse "$BASE/mutation_cds_macse_strict_summary.tsv" \
-        --frameshifts "$BASE/frameshifts.tsv" \
-        --stops "$BASE/stop_genes.tsv" \
-        > "$BASE/mutation_screen_results.tsv"
+        --macse     "$MACSE_SUMMARY" \
+        --frameshifts "$FRAMESHIFTS" \
+        --stops     "$STOP_GENES" \
+        --output    "${BASE}/mutation_screen_results.tsv"
+
+    echo "✅ Screening results: ${BASE}/mutation_screen_results.tsv"
 else
-    echo "No mutation list supplied; discovery mode only"
+    echo
+    echo "ℹ No MUTATION_LIST supplied — discovery mode only"
 fi
 
 echo
-echo "✅ MUTATION PIPELINE COMPLETE"
-echo "➡ Output: ${BASE}/mutation_final_evidence.tsv"
-``
+echo "✅ PIPELINE COMPLETE"
+echo "➡ Final evidence table: $FINAL_OUT"
