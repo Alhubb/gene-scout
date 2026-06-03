@@ -21,9 +21,10 @@ FRAMESHIFTS="$BASE/frameshifts.tsv"
 INDELS="$BASE/indels.tsv"
 STOP_GENES="$BASE/stop_genes.tsv"
 
-# MUTATION_LIST is required — used in both step 4 (frameshift detection)
-# and step 6 (mutation screening).
-: "${MUTATION_LIST:?Need MUTATION_LIST — run: export MUTATION_LIST=/path/to/mutation_list.tsv}"
+# MUTATION_LIST is optional — if not set, screening step is skipped.
+# Set via: export MUTATION_LIST=/path/to/mutation_list.tsv
+# or pass --mutations to gene-scout.
+MUTATION_LIST="${MUTATION_LIST:-}"
 
 # ============================================================
 # HELPERS
@@ -135,14 +136,19 @@ done_ "MACSE summary → $(basename "$MACSE_SUMMARY")"
 
 step "4" "Detecting position-specific frameshifts"
 
-conda run -n python python \
-    "$SCRIPTS/detect_frameshifts_macse.py" \
-    "$MACSE_OUT" \
-    "$MUTATION_LIST" \
-    "$FRAMESHIFTS"
+if [ -z "${MUTATION_LIST}" ]; then
+    warn "No MUTATION_LIST — skipping frameshift detection"
+    > "$FRAMESHIFTS"
+else
+    conda run -n python python \
+        "$SCRIPTS/detect_frameshifts_macse.py" \
+        "$MACSE_OUT" \
+        "$MUTATION_LIST" \
+        "$FRAMESHIFTS"
 
-n=$(wc -l < "$FRAMESHIFTS")
-done_ "$n position-specific frameshift hits → $(basename "$FRAMESHIFTS")"
+    n=$(wc -l < "$FRAMESHIFTS")
+    done_ "$n position-specific frameshift hits → $(basename "$FRAMESHIFTS")"
+fi
 
 # ============================================================
 # 4.5 IN-FRAME INDEL DETECTION (three-tier, MACSE AA alignments)
@@ -150,14 +156,19 @@ done_ "$n position-specific frameshift hits → $(basename "$FRAMESHIFTS")"
 
 step "4.5" "Detecting in-frame indels (delins / inframe_deletion)"
 
-conda run -n python python \
-    "$SCRIPTS/detect_indels_macse.py" \
-    "$MACSE_OUT" \
-    "$MUTATION_LIST" \
-    "$INDELS"
+if [ -z "${MUTATION_LIST}" ]; then
+    warn "No MUTATION_LIST — skipping indel detection"
+    > "$INDELS"
+else
+    conda run -n python python \
+        "$SCRIPTS/detect_indels_macse.py" \
+        "$MACSE_OUT" \
+        "$MUTATION_LIST" \
+        "$INDELS"
 
-n=$(wc -l < "$INDELS")
-done_ "$n indel hits → $(basename "$INDELS")"
+    n=$(wc -l < "$INDELS")
+    done_ "$n indel hits → $(basename "$INDELS")"
+fi
 
 # ============================================================
 # 5. STOP-GAIN / STOP-LOSS DETECTION
