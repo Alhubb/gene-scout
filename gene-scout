@@ -1,12 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# ============================================================
+# GENE-SCOUT: Gene-centric mutation detection pipeline
+# ============================================================
+
 usage() {
     echo ""
     echo "GENE-SCOUT: Gene-centric mutation detection pipeline"
     echo ""
     echo "Usage:"
-    echo "  gene-scout --genomes DIR --ancestors DIR --out DIR [--mutations TSV]"
+    echo "  gene-scout --genomes DIR --ancestors DIR --out DIR [options]"
     echo ""
     echo "Required:"
     echo "  --genomes    DIR   Directory of genome assemblies (.fna / .fasta / .fna.gz)"
@@ -15,52 +19,95 @@ usage() {
     echo ""
     echo "Optional:"
     echo "  --mutations  TSV   Mutation list TSV (gene, aa_start, aa_end, mutation_type)"
-    echo "                     If supplied, runs screen_mutations.py against evidence"
+    echo "                     If supplied, runs full tiered mutation screening"
+    echo "  --threads    N     Number of parallel jobs (default: 4)"
     echo ""
     exit 1
 }
+
+# ============================================================
+# PARSE ARGUMENTS
+# ============================================================
 
 GENOMES=""
 ANCESTORS=""
 OUT=""
 MUTATIONS=""
+THREADS="4"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --genomes)
-            GENOMES="$2"; shift 2 ;;
-        --ancestors)
-            ANCESTORS="$2"; shift 2 ;;
-        --out)
-            OUT="$2"; shift 2 ;;
-        --mutations)
-            MUTATIONS="$2"; shift 2 ;;
-        *)
-            usage ;;
+        --genomes)   GENOMES="$2";   shift 2 ;;
+        --ancestors) ANCESTORS="$2"; shift 2 ;;
+        --out)       OUT="$2";       shift 2 ;;
+        --mutations) MUTATIONS="$2"; shift 2 ;;
+        --threads)   THREADS="$2";   shift 2 ;;
+        -h|--help)   usage ;;
+        *) echo "Unknown option: $1"; usage ;;
     esac
 done
 
-[[ -z "$GENOMES" || -z "$ANCESTORS" || -z "$OUT" ]] && usage
+[[ -z "$GENOMES"   ]] && { echo "ERROR: --genomes is required";   usage; }
+[[ -z "$ANCESTORS" ]] && { echo "ERROR: --ancestors is required"; usage; }
+[[ -z "$OUT"       ]] && { echo "ERROR: --out is required";       usage; }
+
+[[ -d "$GENOMES"   ]] || { echo "ERROR: --genomes directory not found: $GENOMES";   exit 1; }
+[[ -d "$ANCESTORS" ]] || { echo "ERROR: --ancestors directory not found: $ANCESTORS"; exit 1; }
+
+# ============================================================
+# EXPORT ENVIRONMENT VARIABLES FOR SUBSCRIPTS
+# ============================================================
 
 export BASE="$(realpath "$OUT")"
 export GENOME_FASTA_DIR="$(realpath "$GENOMES")"
 export WT_GENES="$(realpath "$ANCESTORS")"
-export MUTATION_LIST="${MUTATIONS}"
+export MUTATION_LIST="${MUTATIONS:-}"
+export THREADS="$THREADS"
 
 SCRIPTS="$(dirname "$(realpath "$0")")/scripts"
 
 mkdir -p "$BASE"
-cd "$BASE"
 
-echo "Running minimap2 alignment"
-bash "$SCRIPTS/minimap_loop.sh"
-
-echo "Extracting CDS from PAF files"
-bash "$SCRIPTS/paf_loop.sh"
-
-echo "Running mutation detection pipeline"
-bash "$SCRIPTS/run_pipeline.sh"
+# ============================================================
+# PRINT CONFIGURATION
+# ============================================================
 
 echo ""
-echo "GENE-SCOUT COMPLETE"
-echo "Results in: $BASE"
+echo "══════════════════════════════════════════"
+echo "  GENE-SCOUT"
+echo "══════════════════════════════════════════"
+echo "  Genomes:   $GENOME_FASTA_DIR"
+echo "  Ancestors: $WT_GENES"
+echo "  Output:    $BASE"
+echo "  Threads:   $THREADS"
+if [ -n "$MUTATION_LIST" ]; then
+    echo "  Mutations: $MUTATION_LIST"
+else
+    echo "  Mutations: not supplied (screening step will be skipped)"
+fi
+echo "══════════════════════════════════════════"
+echo ""
+
+# ============================================================
+# RUN PIPELINE STEPS
+# ============================================================
+
+echo "── Step A: minimap2 alignment ──────────────────────────"
+bash "$SCRIPTS/minimap_loop.sh"
+
+echo ""
+echo "── Step B: CDS extraction from PAF files ───────────────"
+bash "$SCRIPTS/paf_loop.sh"
+
+echo ""
+bash "$SCRIPTS/run_pipeline.sh"
+
+# ============================================================
+
+echo ""
+echo "══════════════════════════════════════════"
+echo "  ✅  GENE-SCOUT COMPLETE"
+echo "  ➡   $BASE"
+echo "══════════════════════════════════════════"
+echo ""
+
