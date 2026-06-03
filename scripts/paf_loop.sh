@@ -5,7 +5,7 @@ set -euo pipefail
 : "${BASE:?Need BASE}"
 : "${GENOME_FASTA_DIR:?Need GENOME_FASTA_DIR}"
 
-PAF_BASE="${BASE}/minimap2_output"
+PAF_BASE="${MINIMAP_OUT:-${BASE}/minimap2_output}"
 OUTBASE="${BASE}/extracted_genes"
 SCRIPTS="$(dirname "$(realpath "$0")")"
 

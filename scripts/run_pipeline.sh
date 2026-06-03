@@ -1,49 +1,47 @@
 #!/bin/bash
-
 set -euo pipefail
 
-###############################################################################
-# REQUIRED ENVIRONMENT VARIABLES
-###############################################################################
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-: "${BASE:?Need BASE}"
-: "${WT_GENES:?Need WT_GENES}"
+BASE="/home/alasdair/3D_UHU_evo_analysis"
+SCRIPTS="$BASE/scripts"
+MINIMAP_OUT="/media/alasdair/External/3D_UHU/minimap2_output"
 
-###############################################################################
-# PATHS
-###############################################################################
+EXTRACTED="$BASE/extracted_genes"
+WT="$BASE/WT_gene_fasta"
+PER_GENE_FASTAS="$BASE/per_gene_fastas"
+PER_GENE_FASTAS_DEDUP="$BASE/per_gene_fastas_dedup"
+MACSE_OUT="$BASE/macse_output"
+STOP_CALLS="$BASE/stop_calls"
 
-EXTRACTED="${BASE}/extracted_genes"
-MINIMAP_OUT="${BASE}/minimap2_output"
+MACSE_SUMMARY="$BASE/mutation_cds_macse_strict_summary.tsv"
+FRAMESHIFTS="$BASE/frameshifts.tsv"
+INDELS="$BASE/indels.tsv"
+STOP_GENES="$BASE/stop_genes.tsv"
 
-PER_GENE_FASTAS="${BASE}/per_gene_fastas"
-PER_GENE_FASTAS_DEDUP="${BASE}/per_gene_fastas_dedup"
-MACSE_OUT="${BASE}/macse_output"
+# MUTATION_LIST is required — used in both step 4 (frameshift detection)
+# and step 6 (mutation screening).
+: "${MUTATION_LIST:?Need MUTATION_LIST — run: export MUTATION_LIST=/path/to/mutation_list.tsv}"
 
-STOP_CALLS="${BASE}/stop_calls"
-STOP_GENES="${BASE}/stop_genes.tsv"
-FRAMESHIFTS="${BASE}/frameshifts.tsv"
-MACSE_SUMMARY="${BASE}/mutation_cds_macse_strict_summary.tsv"
-FINAL_OUT="${BASE}/mutation_final_evidence.tsv"
+# ============================================================
+# HELPERS
+# ============================================================
 
-SCRIPTS="$(dirname "$(realpath "$0")")"
+step() { echo; echo "── Step $1: $2 ──────────────────────────"; }
+done_() { echo "   ✅ $1"; }
+warn() { echo "   ⚠  $1"; }
 
-# FIX: respect THREADS environment variable (default 4) so users can
-# control parallelism without editing the script.
-THREADS="${THREADS:-4}"
+# ============================================================
+# 1. BUILD PER-GENE FASTAs
+# ============================================================
 
-###############################################################################
-# STEP 1 — BUILD PER-GENE FASTAs
-###############################################################################
-
-echo
-echo "==============================="
-echo "1️⃣  Building per-gene FASTAs"
-echo "==============================="
-
+step "1" "Building per-gene FASTAs"
 mkdir -p "$PER_GENE_FASTAS"
 
-for dir in "$EXTRACTED"/*_minimap_hits; do
+built=0; skipped=0
+for dir in "$EXTRACTED"/*; do
     [ -d "$dir" ] || continue
 
     name=$(basename "$dir")
@@ -51,12 +49,12 @@ for dir in "$EXTRACTED"/*_minimap_hits; do
     lineage="${core##*_}"
     gene="${core%_*}"
 
-    wt_fasta="${WT_GENES}/${gene}_${lineage}.fasta"
-    out_fasta="${PER_GENE_FASTAS}/${gene}_${lineage}.fasta"
+    wt_fasta="$WT/${gene}_${lineage}.fasta"
+    out_fasta="$PER_GENE_FASTAS/${gene}_${lineage}.fasta"
 
     if [ ! -f "$wt_fasta" ]; then
-        echo "⚠ Missing WT ${gene}_${lineage}, skipping"
-        continue
+        warn "Missing WT for ${gene}_${lineage} — skipping"
+        skipped=$((skipped + 1)); continue
     fi
 
     shopt -s nullglob
@@ -64,190 +62,145 @@ for dir in "$EXTRACTED"/*_minimap_hits; do
     shopt -u nullglob
 
     if [ ${#files[@]} -eq 0 ]; then
-        echo "⚠ No mutant CDS for ${gene}_${lineage}, skipping"
-        continue
+        warn "No mutant CDS files in $dir — skipping"
+        skipped=$((skipped + 1)); continue
     fi
 
-    echo "✅ Building $out_fasta"
-
-    {
-        cat "$wt_fasta"
-        echo
-        for f in "${files[@]}"; do
-            cat "$f"
-            echo
-        done
+    { cat "$wt_fasta"; echo
+      for f in "${files[@]}"; do cat "$f"; echo; done
     } > "$out_fasta"
+    built=$((built + 1))
 done
 
-###############################################################################
-# STEP 2 — DEDUPLICATE PER-GENE FASTAs
-###############################################################################
+done_ "$built gene/lineage FASTAs built${skipped:+, $skipped skipped}"
 
-echo
-echo "==============================="
-echo "2️⃣  Deduplicating per-gene FASTAs"
-echo "==============================="
+# ============================================================
+# 1.5 DEDUPLICATE PER-GENE FASTAs
+# ============================================================
 
+step "1.5" "Deduplicating per-gene FASTAs"
 mkdir -p "$PER_GENE_FASTAS_DEDUP"
 
 for f in "$PER_GENE_FASTAS"/*.fasta; do
     base=$(basename "$f")
-    out="${PER_GENE_FASTAS_DEDUP}/${base}"
-    seqkit rmdup -s "$f" > "$out"
+    out="$PER_GENE_FASTAS_DEDUP/$base"
+    conda run -n python seqkit rmdup -s "$f" > "$out"
     n=$(grep -c "^>" "$out")
-    echo "✅ $base → $n unique CDS variants"
+    echo "   ${base%.fasta}: $n unique CDS variants"
 done
 
-###############################################################################
-# STEP 3 — MACSE (CODON-AWARE ALIGNMENT)
-###############################################################################
+done_ "Deduplication complete"
 
-echo
-echo "==============================="
-echo "3️⃣  Running MACSE (codon-aware)"
-echo "==============================="
+# ============================================================
+# 2. MACSE CODON-AWARE ALIGNMENT
+# ============================================================
 
+step "2" "Running MACSE alignment (4 cores)"
 mkdir -p "$MACSE_OUT"
 
-find "$PER_GENE_FASTAS_DEDUP" -name "*.fasta" -print0 | \
-xargs -0 -r -n 1 -P "$THREADS" bash -c '
-    set -o noglob
+find "$PER_GENE_FASTAS_DEDUP" -maxdepth 1 -type f -name "*.fasta" -print0 | \
+xargs -0 -r -n 1 -P 4 bash -c '
     f="$1"
     base=$(basename "$f" .fasta)
-
     if [ -f "'"$MACSE_OUT"'/${base}_aligned_aa.fasta" ]; then
-        echo "Skipping $base (already aligned)"
+        echo "   ${base}: already aligned — skipping"
         exit 0
     fi
-
-    echo "Running MACSE on $base"
-
-    macse -prog alignSequences \
+    echo "   Aligning: $base"
+    conda run -n macse macse \
+      -prog alignSequences \
       -seq "$f" \
       -out_AA "'"$MACSE_OUT"'/${base}_aligned_aa.fasta" \
       -out_NT "'"$MACSE_OUT"'/${base}_aligned_nt.fasta"
 ' _
 
-###############################################################################
-# STEP 4 — SCAN MACSE ALIGNMENTS FOR MISSENSE / IN-FRAME INDELS
-###############################################################################
+done_ "MACSE alignments complete"
 
-echo
-echo "==============================="
-echo "4️⃣  Scanning MACSE alignments"
-echo "==============================="
+# ============================================================
+# 3. MACSE MUTATION SCAN
+# ============================================================
 
-python "$SCRIPTS/scan_mutations_cds_macse.py" "$MACSE_OUT" \
+step "3" "Scanning MACSE alignments for mutations"
+
+conda run -n python python \
+    "$SCRIPTS/scan_mutations_cds_macse.py" \
+    "$MACSE_OUT" \
     > "$MACSE_SUMMARY"
 
-###############################################################################
-# STEP 5 — FRAMESHIFT DETECTION FROM CIGAR STRINGS
-###############################################################################
+done_ "MACSE summary → $(basename "$MACSE_SUMMARY")"
 
-echo
-echo "==============================="
-echo "5️⃣  Detecting frameshifts"
-echo "==============================="
+# ============================================================
+# 4. FRAMESHIFT DETECTION (position-aware, MACSE NT alignments)
+# ============================================================
 
-> "$FRAMESHIFTS"
+step "4" "Detecting position-specific frameshifts"
 
-for dir in "$MINIMAP_OUT"/*_minimap_hits; do
-    [ -d "$dir" ] || continue
+conda run -n python python \
+    "$SCRIPTS/detect_frameshifts_macse.py" \
+    "$MACSE_OUT" \
+    "$MUTATION_LIST" \
+    "$FRAMESHIFTS"
 
-    dirname=$(basename "$dir")
-    core="${dirname%_minimap_hits}"
-    gene="${core%_*}"
+n=$(wc -l < "$FRAMESHIFTS")
+done_ "$n position-specific frameshift hits → $(basename "$FRAMESHIFTS")"
 
-    for paf in "$dir"/*.paf; do
-        [ -f "$paf" ] || continue
+# ============================================================
+# 4.5 IN-FRAME INDEL DETECTION (three-tier, MACSE AA alignments)
+# ============================================================
 
-        awk -v gene="$gene" -v src="$paf" '
-        {
-            cigar = ""
-            for (i = 1; i <= NF; i++)
-                if ($i ~ /^cg:Z:/) cigar = substr($i, 6)
-            if (cigar == "") next
+step "4.5" "Detecting in-frame indels (delins / inframe_deletion)"
 
-            fs = 0
-            tmp = cigar
-            while (match(tmp, /[0-9]+[ID]/)) {
-                op  = substr(tmp, RSTART, RLENGTH)
-                n   = substr(op, 1, length(op)-1) + 0
-                if (n % 3 != 0) fs = 1
-                tmp = substr(tmp, RSTART + RLENGTH)
-            }
-            if (fs) print src "\t" gene
-        }' "$paf" >> "$FRAMESHIFTS"
-    done
-done
+conda run -n python python \
+    "$SCRIPTS/detect_indels_macse.py" \
+    "$MACSE_OUT" \
+    "$MUTATION_LIST" \
+    "$INDELS"
 
-sort -u "$FRAMESHIFTS" -o "$FRAMESHIFTS"
-echo "✅ Frameshifts written to $FRAMESHIFTS"
+n=$(wc -l < "$INDELS")
+done_ "$n indel hits → $(basename "$INDELS")"
 
-###############################################################################
-# STEP 6 — STOP-GAIN / STOP-LOSS
-###############################################################################
+# ============================================================
+# 5. STOP-GAIN / STOP-LOSS DETECTION
+# ============================================================
 
-echo
-echo "==============================="
-echo "6️⃣  Detecting stop-gain / stop-loss"
-echo "==============================="
-
+step "5" "Detecting stop-gain / stop-loss mutations"
 mkdir -p "$STOP_CALLS"
-> "${STOP_CALLS}/stop_calls.tsv"
+> "$STOP_CALLS/stop_calls.tsv"
 
 for f in "$PER_GENE_FASTAS"/*.fasta; do
-    python "$SCRIPTS/detect_stop_mutations.py" "$f" \
-        >> "${STOP_CALLS}/stop_calls.tsv"
+    conda run -n python python \
+        "$SCRIPTS/detect_stop_mutations.py" "$f" \
+        >> "$STOP_CALLS/stop_calls.tsv"
 done
 
-# FIX: detect_stop_mutations.py outputs three columns:
-# gene_name  isolate_id  event_type
-# Pass all three through — merge_mutation_evidence.py requires NF >= 3.
-awk 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' "${STOP_CALLS}/stop_calls.tsv" \
+awk 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' "$STOP_CALLS/stop_calls.tsv" \
     | sort -u > "$STOP_GENES"
 
-echo "✅ Stop mutations written to $STOP_GENES"
+n=$(wc -l < "$STOP_GENES")
+done_ "$n stop events → $(basename "$STOP_GENES")"
 
-###############################################################################
-# STEP 7 — FINAL MERGE
-###############################################################################
+# ============================================================
+# 6. MUTATION SCREENING
+# ============================================================
 
-echo
-echo "==============================="
-echo "7️⃣  Final merge"
-echo "==============================="
+step "6" "Screening predefined mutations"
 
-python "$SCRIPTS/merge_mutation_evidence.py" \
-    "$MACSE_SUMMARY" \
-    "$FRAMESHIFTS" \
-    "$STOP_GENES" \
-    > "$FINAL_OUT"
+conda run -n python python \
+    "$SCRIPTS/screen_mutations.py" \
+    --mutations   "$MUTATION_LIST" \
+    --macse       "$MACSE_SUMMARY" \
+    --frameshifts "$FRAMESHIFTS" \
+    --indels      "$INDELS" \
+    --stops       "$STOP_GENES" \
+    --output      "$BASE/mutation_screen_results.tsv"
 
-###############################################################################
-# STEP 8 — OPTIONAL MUTATION SCREENING
-###############################################################################
+done_ "Results → mutation_screen_results.tsv"
 
-if [ -n "${MUTATION_LIST:-}" ]; then
-    echo
-    echo "==============================="
-    echo "8️⃣  Screening predefined mutations"
-    echo "==============================="
-
-    python "$SCRIPTS/screen_mutations.py" \
-        --mutations "$MUTATION_LIST" \
-        --macse     "$MACSE_SUMMARY" \
-        --frameshifts "$FRAMESHIFTS" \
-        --stops     "$STOP_GENES" \
-        --output    "${BASE}/mutation_screen_results.tsv"
-
-    echo "✅ Screening results: ${BASE}/mutation_screen_results.tsv"
-else
-    echo
-    echo "ℹ No MUTATION_LIST supplied — discovery mode only"
-fi
+# ============================================================
 
 echo
-echo "✅ PIPELINE COMPLETE"
-echo "➡ Final evidence table: $FINAL_OUT"
+echo "══════════════════════════════════════════"
+echo "  ✅  PIPELINE COMPLETE"
+echo "  ➡   $BASE/mutation_screen_results.tsv"
+echo "══════════════════════════════════════════"
+echo
