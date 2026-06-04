@@ -53,6 +53,8 @@ Supported formats:
 Assemblies may contain one or multiple contigs.
 GENE-SCOUT does not assume any specific genome source.
 
+*Must be in a file named "fasta".*
+
 ---
 
 ### Ancestor genes (`--ancestors`)
@@ -69,6 +71,8 @@ Supported formats:
 Each ancestor FASTA file must contain a single CDS corresponding to one
 gene of interest and represent the coding region only
 (no UTRs or introns).
+
+*Must be in a file named "WT_gene_fasta"*.
 
 ---
 
