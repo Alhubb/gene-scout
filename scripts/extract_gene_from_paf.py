@@ -14,7 +14,6 @@ def revcomp(seq):
 
 
 def parse_best_hit(paf_file):
-
     best = None
     best_matches = -1
 
@@ -23,6 +22,7 @@ def parse_best_hit(paf_file):
             fields = line.rstrip().split("\t")
             if len(fields) < 12:
                 continue
+
             try:
                 mapq    = int(fields[11])
                 matches = int(fields[9])
@@ -33,7 +33,6 @@ def parse_best_hit(paf_file):
             except (ValueError, IndexError):
                 continue
 
-            # Skip ambiguous / unmapped hits
             if mapq == 0:
                 continue
 
@@ -45,7 +44,6 @@ def parse_best_hit(paf_file):
 
 
 def read_assembly(assembly_file):
-
     if assembly_file == "/dev/stdin":
         raw = sys.stdin.buffer.read()
         handle = (
@@ -53,12 +51,41 @@ def read_assembly(assembly_file):
             if raw[:2] == b"\x1f\x8b"
             else io.StringIO(raw.decode())
         )
-    elif assembly_file.endswith(".gz"):
-        handle = io.TextIOWrapper(gzip.open(assembly_file, "rb"))
-    else:
-        handle = open(assembly_file)
+        records = {rec.id: str(rec.seq) for rec in SeqIO.parse(handle, "fasta")}
+        handle.close()
+        return records
 
-    return {rec.id: str(rec.seq) for rec in SeqIO.parse(handle, "fasta")}
+    elif assembly_file.endswith(".gz"):
+        with gzip.open(assembly_file, "rt") as handle:
+            return {rec.id: str(rec.seq) for rec in SeqIO.parse(handle, "fasta")}
+
+    else:
+        with open(assembly_file) as handle:
+            return {rec.id: str(rec.seq) for rec in SeqIO.parse(handle, "fasta")}
+
+
+def find_contig(records, tname):
+    """
+    Robust contig matching:
+    - exact match
+    - split-name match
+    - prefix match
+    """
+    if tname in records:
+        return records[tname]
+
+    key = tname.split()[0]
+
+    # Try exact key match
+    if key in records:
+        return records[key]
+
+    # Try prefix match
+    for k, v in records.items():
+        if k.startswith(key):
+            return v
+
+    return None
 
 
 def main():
@@ -74,21 +101,32 @@ def main():
 
     records = read_assembly(assembly_file)
 
+    if not records:
+        print(f"[WARN] No sequences found in {assembly_file}", file=sys.stderr)
+        sys.exit(0)
+
     hit = parse_best_hit(paf_file)
     if hit is None:
         print(f"[WARN] No valid hits in {paf_file}", file=sys.stderr)
         sys.exit(0)
 
     tname, strand, start, end = hit
+
     if end < start:
         start, end = end, start
 
-    seq = records.get(tname) or records.get(tname.split()[0])
+    seq = find_contig(records, tname)
+
     if seq is None:
         print(f"[WARN] Contig {tname} not found in assembly", file=sys.stderr)
         sys.exit(0)
 
-    extracted = str(seq[start:end])
+    # ✅ Clamp coordinates safely
+    start = max(0, start)
+    end = min(len(seq), end)
+
+    extracted = seq[start:end]
+
     if strand == "-":
         extracted = revcomp(extracted)
 
