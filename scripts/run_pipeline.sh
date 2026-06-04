@@ -11,7 +11,7 @@ BASE="${BASE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 SCRIPTS="$SCRIPT_DIR"
 
 EXTRACTED="${EXTRACTED:-$BASE/extracted_genes}"
-WT="${WT:-$BASE/WT_gene_fasta}"
+WT="${WT_GENES:-${WT:-$BASE/WT_gene_fasta}}"
 PER_GENE_FASTAS="$BASE/per_gene_fastas"
 PER_GENE_FASTAS_DEDUP="$BASE/per_gene_fastas_dedup"
 MACSE_OUT="$BASE/macse_output"
