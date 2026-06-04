@@ -1,5 +1,4 @@
 #!/bin/bash
-# FIX: Added set -euo pipefail throughout for consistent error handling.
 set -euo pipefail
 
 BASE="/home/alasdair/3D_UHU_evo_analysis"
@@ -12,25 +11,34 @@ mkdir -p "$OUT"
 for dir in "$EXTRACTED"/*; do
     [ -d "$dir" ] || continue
 
-    # e.g. cyaA_34
+    # Strip suffix correctly
     name=$(basename "$dir")
+    core="${name%_minimap_hits}"
 
-    # FIX: Original used cut -d'_' -f1 / -f2, which silently breaks for any
-    # gene name containing an underscore. We now split on the LAST underscore
-    # so that multi-part gene names (e.g. rpo_B) survive intact, and the
-    # lineage suffix (always a plain number) is cleanly separated.
-    lineage="${name##*_}"      # everything after the last underscore  → 34
-    gene="${name%_*}"          # everything before the last underscore → cyaA
-
-    wt_fasta="$WT/${gene}_${lineage}.fasta"
-    out_fasta="$OUT/${gene}_${lineage}.fasta"
-
-    if [ ! -f "$wt_fasta" ]; then
-        echo "⚠ Missing WT file for $gene $lineage, skipping"
-        continue
+    # ✅ robust parsing
+    if [[ "$core" == *_* ]]; then
+        gene="${core%_*}"
+        lineage="${core##*_}"
+    else
+        gene="$core"
+        lineage="unknown"
     fi
 
-    # Collect matching extracted CDS files
+    wt_fasta="$WT/${gene}_${lineage}.fasta"
+
+    # ✅ fallback logic
+    if [ ! -f "$wt_fasta" ]; then
+        fallback="$WT/${gene}.fasta"
+        if [ -f "$fallback" ]; then
+            wt_fasta="$fallback"
+        else
+            echo "⚠ Missing WT file for $gene ($lineage), skipping"
+            continue
+        fi
+    fi
+
+    out_fasta="$OUT/${gene}_${lineage}.fasta"
+
     shopt -s nullglob
     files=( "$dir"/*.bakta."$gene".fasta )
     shopt -u nullglob
@@ -43,16 +51,15 @@ for dir in "$EXTRACTED"/*; do
     echo "✅ Building $out_fasta (${#files[@]} mutant(s))"
 
     {
-        # WT ancestor first
         cat "$wt_fasta"
         echo
 
-        # All mutant CDS for this gene
         for f in "${files[@]}"; do
             cat "$f"
             echo
         done
     } > "$out_fasta"
+
 done
 
 echo "✅ Per-gene FASTAs written to $OUT"
