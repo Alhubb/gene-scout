@@ -15,10 +15,15 @@ for dir in "$PAF_BASE"/*_minimap_hits; do
     [ -d "$dir" ] || continue
 
     name=$(basename "$dir")
-    core="${name%_minimap_hits}"
+core="${name%_minimap_hits}"
 
-    lineage="${core##*_}"   # everything after the last _  → e.g. 34
-    gene="${core%_*}"       # everything before the last _ → e.g. cyaA
+if [[ "$core" == *_* ]]; then
+    gene="${core%_*}"
+    lineage="${core##*_}"
+else
+    gene="$core"
+    lineage="unknown"
+fi
 
     outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
     mkdir -p "$outdir"
