@@ -5,7 +5,7 @@ import sys
 import glob
 from Bio import SeqIO
 
-DEBUG = True
+DEBUG = False  # set True if you want verbose debug output
 
 # ============================================================
 # Load mutation list
@@ -16,17 +16,21 @@ def load_mutations(tsv_file):
 
     with open(tsv_file) as fh:
         for line in fh:
-            if line.startswith("#") or not line.strip():
+            if not line.strip():
                 continue
 
             fields = line.strip().split("\t")
+
+            # ✅ skip header safely
+            if fields[0].lower() == "gene":
+                continue
 
             if len(fields) < 4:
                 continue
 
             gene = fields[0]
             start = int(fields[1])
-            end = int(fields[2])
+            end   = int(fields[2])
             mtype = fields[3]
 
             expected = None
@@ -36,6 +40,7 @@ def load_mutations(tsv_file):
             mutations.append((gene, start, end, mtype, expected))
 
     return mutations
+
 
 # ============================================================
 # Constants
@@ -73,6 +78,7 @@ def get_alignment_columns(anc_seq, start, end):
         col_end += 1
 
     return col_start, col_end
+
 
 # ============================================================
 # Mutation logic
@@ -126,6 +132,7 @@ def confirm_indel(anc, iso, start, end, inserted=None):
 
     return True
 
+
 # ============================================================
 # Main
 # ============================================================
@@ -145,11 +152,10 @@ def main():
 
     print(f"[INFO] Loaded {len(MUTATIONS)} mutations", file=sys.stderr)
 
-    # ✅ collect ALL alignments
+    # ✅ collect all alignments
     all_alignments = glob.glob(os.path.join(macse_dir, "*_aligned_aa.fasta"))
     print(f"[INFO] Found {len(all_alignments)} alignment files", file=sys.stderr)
 
-    # initialise results
     present_exact = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
     present_any   = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
 
@@ -162,7 +168,6 @@ def main():
         if m not in MACSE_TYPES:
             continue
 
-        # ✅ robust matching
         matching_files = [
             f for f in all_alignments
             if g.lower() in os.path.basename(f).lower()
@@ -185,6 +190,7 @@ def main():
                     res = get_isolate_residue(anc, iso, s, e)
                     anc_res = get_isolate_residue(anc, anc, s, e)
 
+                    # ✅ exact match OR fallback if no expected AA
                     if x is None:
                         if confirm_any_missense(anc, iso, s, e):
                             present_exact[(g, s, e, m)] = 1
@@ -217,6 +223,7 @@ def main():
             f"{present_exact.get((g, s, e, m), 0)}\t"
             f"{present_any.get((g, s, e, m), 0)}"
         )
+
 
 # ============================================================
 
