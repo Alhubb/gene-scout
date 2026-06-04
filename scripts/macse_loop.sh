@@ -72,4 +72,3 @@ for dir in "$GENE_DIR"/*; do
 
     echo "✅ MACSE finished: ${gene}_${anc}"
 done
-``
