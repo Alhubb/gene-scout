@@ -1,10 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# ============================================================
-# GENE-SCOUT: Gene-centric mutation detection pipeline
-# ============================================================
-
 usage() {
     echo ""
     echo "GENE-SCOUT: Gene-centric mutation detection pipeline"
@@ -13,14 +9,13 @@ usage() {
     echo "  gene-scout --genomes DIR --ancestors DIR --out DIR [options]"
     echo ""
     echo "Required:"
-    echo "  --genomes    DIR   Directory of genome assemblies (.fna / .fasta / .fna.gz)"
-    echo "  --ancestors  DIR   Directory of ancestral gene CDS FASTA files"
+    echo "  --genomes    DIR   Directory of genome assemblies"
+    echo "  --ancestors  DIR   WT gene CDS FASTA directory"
     echo "  --out        DIR   Output directory"
     echo ""
     echo "Optional:"
-    echo "  --mutations  TSV   Mutation list TSV (gene, aa_start, aa_end, mutation_type)"
-    echo "                     If supplied, runs full tiered mutation screening"
-    echo "  --threads    N     Number of parallel jobs (default: 4)"
+    echo "  --mutations  TSV   Mutation list"
+    echo "  --threads    N     Number of threads (default: 4)"
     echo ""
     exit 1
 }
@@ -47,67 +42,85 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -z "$GENOMES"   ]] && { echo "ERROR: --genomes is required";   usage; }
-[[ -z "$ANCESTORS" ]] && { echo "ERROR: --ancestors is required"; usage; }
-[[ -z "$OUT"       ]] && { echo "ERROR: --out is required";       usage; }
+[[ -z "$GENOMES"   ]] && { echo "ERROR: --genomes required";   usage; }
+[[ -z "$ANCESTORS" ]] && { echo "ERROR: --ancestors required"; usage; }
+[[ -z "$OUT"       ]] && { echo "ERROR: --out required";       usage; }
 
-[[ -d "$GENOMES"   ]] || { echo "ERROR: --genomes directory not found: $GENOMES";   exit 1; }
-[[ -d "$ANCESTORS" ]] || { echo "ERROR: --ancestors directory not found: $ANCESTORS"; exit 1; }
+[[ -d "$GENOMES"   ]] || { echo "ERROR: genomes dir not found"; exit 1; }
+[[ -d "$ANCESTORS" ]] || { echo "ERROR: ancestors dir not found"; exit 1; }
+
+# ✅ Validate mutation file
+if [ -n "$MUTATIONS" ] && [ ! -f "$MUTATIONS" ]; then
+    echo "ERROR: mutation list not found: $MUTATIONS"
+    exit 1
+fi
+
+# ✅ Validate threads
+if ! [[ "$THREADS" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: --threads must be an integer"
+    exit 1
+fi
 
 # ============================================================
-# EXPORT ENVIRONMENT VARIABLES FOR SUBSCRIPTS
+# PATHS
 # ============================================================
 
-export BASE="$(realpath "$OUT")"
-export GENOME_FASTA_DIR="$(realpath "$GENOMES")"
-export WT_GENES="$(realpath "$ANCESTORS")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS="$SCRIPT_DIR/scripts"
+
+export BASE="$(cd "$OUT" && pwd 2>/dev/null || echo "$OUT")"
+export GENOME_FASTA_DIR="$(cd "$GENOMES" && pwd)"
+export WT_GENES="$(cd "$ANCESTORS" && pwd)"
 export MUTATION_LIST="${MUTATIONS:-}"
 export THREADS="$THREADS"
-
-SCRIPTS="$(dirname "$(realpath "$0")")/scripts"
 
 mkdir -p "$BASE"
 
 # ============================================================
-# PRINT CONFIGURATION
+# DEPENDENCY CHECK
+# ============================================================
+
+for cmd in minimap2 seqkit macse python; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "ERROR: Missing dependency: $cmd"
+        exit 1
+    fi
+done
+
+# ============================================================
+# CONFIG PRINT
 # ============================================================
 
 echo ""
 echo "══════════════════════════════════════════"
 echo "  GENE-SCOUT"
 echo "══════════════════════════════════════════"
-echo "  Genomes:   $GENOME_FASTA_DIR"
-echo "  Ancestors: $WT_GENES"
-echo "  Output:    $BASE"
-echo "  Threads:   $THREADS"
-if [ -n "$MUTATION_LIST" ]; then
-    echo "  Mutations: $MUTATION_LIST"
-else
-    echo "  Mutations: not supplied (screening step will be skipped)"
-fi
+echo "Genomes:   $GENOME_FASTA_DIR"
+echo "Ancestors: $WT_GENES"
+echo "Output:    $BASE"
+echo "Threads:   $THREADS"
+[ -n "$MUTATION_LIST" ] && echo "Mutations: $MUTATION_LIST"
 echo "══════════════════════════════════════════"
 echo ""
 
 # ============================================================
-# RUN PIPELINE STEPS
+# RUN PIPELINE
 # ============================================================
 
-echo "── Step A: minimap2 alignment ──────────────────────────"
+echo "── Step A: minimap2 alignment ─────────────"
 bash "$SCRIPTS/minimap_loop.sh"
 
-echo ""
-echo "── Step B: CDS extraction from PAF files ───────────────"
+echo "── Step B: gene extraction ───────────────"
 bash "$SCRIPTS/paf_loop.sh"
 
-echo ""
+echo "── Step C: mutation pipeline ─────────────"
 bash "$SCRIPTS/run_pipeline.sh"
 
 # ============================================================
 
 echo ""
 echo "══════════════════════════════════════════"
-echo "  ✅  GENE-SCOUT COMPLETE"
-echo "  ➡   $BASE"
+echo "  ✅ GENE-SCOUT COMPLETE"
+echo "  ➡  Output: $BASE"
 echo "══════════════════════════════════════════"
 echo ""
-
