@@ -68,7 +68,6 @@ for dir in "$EXTRACTED"/*; do
     name=$(basename "$dir")
     core="${name%_minimap_hits}"
 
-    # ✅ SAFE PARSING
     if [[ "$core" == *_* ]]; then
         gene="${core%_*}"
         lineage="${core##*_}"
@@ -79,7 +78,6 @@ for dir in "$EXTRACTED"/*; do
 
     out_fasta="$PER_GENE_FASTAS/${gene}_${lineage}.fasta"
 
-    # ✅ WT lookup with fallback
     wt_fasta="$WT/${gene}_${lineage}.fasta"
     if [ ! -f "$wt_fasta" ]; then
         candidate="$WT/${gene}.fasta"
@@ -167,14 +165,20 @@ xargs -0 -r -n 1 -P "$THREADS" bash -c '
 done_ "MACSE complete"
 
 # ============================================================
-# 3. MUTATION SCAN
+# 3. MUTATION SCAN (FIXED ✅)
 # ============================================================
 
 step "3" "Scanning mutations"
 
-python "$SCRIPTS/scan_mutations_cds_macse.py" \
-    "$MACSE_OUT" \
+if [ -z "${MUTATION_LIST}" ]; then
+    warn "No mutation list — skipping MACSE scan"
     > "$MACSE_SUMMARY"
+else
+    python "$SCRIPTS/scan_mutations_cds_macse.py" \
+        "$MACSE_OUT" \
+        "$MUTATION_LIST" \
+        > "$MACSE_SUMMARY"
+fi
 
 done_ "Summary written"
 
