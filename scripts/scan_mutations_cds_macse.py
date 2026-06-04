@@ -2,6 +2,7 @@
 
 import os
 import sys
+import csv
 import glob
 from Bio import SeqIO
 
@@ -12,30 +13,35 @@ DEBUG = False  # set True if you want verbose debug output
 # ============================================================
 
 def load_mutations(tsv_file):
+    """
+    Load mutation list TSV. Expected columns:
+        gene  aa_start  aa_end  mutation_type  [expected]
+
+    The 'expected' column is optional — it should contain the single-letter
+    amino acid expected in isolates for missense mutations, or the inserted
+    residue for delins. If absent or blank, exact matching is skipped and
+    any missense at that position counts as a hit.
+
+    Uses csv.DictReader so column order doesn't matter and the 'expected'
+    column is found by name regardless of position.
+    """
     mutations = []
 
     with open(tsv_file) as fh:
-        for line in fh:
-            if not line.strip():
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            gene  = row.get("gene", "").strip()
+            mtype = row.get("mutation_type", "").strip()
+            if not gene or not mtype:
+                continue
+            try:
+                start = int(row["aa_start"])
+                end   = int(row["aa_end"])
+            except (KeyError, ValueError):
                 continue
 
-            fields = line.strip().split("\t")
-
-            # ✅ skip header safely
-            if fields[0].lower() == "gene":
-                continue
-
-            if len(fields) < 4:
-                continue
-
-            gene = fields[0]
-            start = int(fields[1])
-            end   = int(fields[2])
-            mtype = fields[3]
-
-            expected = None
-            if len(fields) >= 5 and fields[4] not in (".", "", "NA"):
-                expected = fields[4]
+            expected_raw = row.get("expected", "").strip()
+            expected = None if expected_raw in ("", ".", "NA", "None") else expected_raw
 
             mutations.append((gene, start, end, mtype, expected))
 
