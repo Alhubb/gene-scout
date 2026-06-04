@@ -89,8 +89,19 @@ echo "==============================="
 for gene in "$WT_GENES"/*.fasta "$WT_GENES"/*.fna; do
     [ -f "$gene" ] || continue
 
-    gene_base=$(basename "$gene")
-    gene_base="${gene_base%.*}"
+gene_file=$(basename "$gene")
+gene_name="${gene_file%.*}"
+
+# Optional: fallback if WT filename still contains lineage
+if [[ "$gene_name" == *_* ]]; then
+    gene="${gene_name%_*}"
+    lineage="${gene_name##*_}"
+else
+    gene="$gene_name"
+    lineage="unknown"
+fi
+
+outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
 
     outdir="${OUTBASE}/${gene_base}_minimap_hits"
     mkdir -p "$outdir"
