@@ -8,7 +8,7 @@ from Bio import SeqIO
 DEBUG = True
 
 # ============================================================
-# Mutation loading
+# Load mutation list
 # ============================================================
 
 def load_mutations(tsv_file):
@@ -78,7 +78,7 @@ def get_alignment_columns(anc_seq, start, end):
 
 
 # ============================================================
-# Confirmation logic
+# Mutation logic
 # ============================================================
 
 def confirm_any_missense(anc, iso, start, end):
@@ -153,6 +153,11 @@ def main():
 
     print(f"[INFO] Loaded {len(MUTATIONS)} mutations", file=sys.stderr)
 
+    # Collect ALL alignment files once
+    all_alignments = glob.glob(os.path.join(macse_dir, "*_aligned_aa.fasta"))
+
+    print(f"[INFO] Found {len(all_alignments)} total alignment files", file=sys.stderr)
+
     present_exact = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
     present_any   = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
 
@@ -160,9 +165,15 @@ def main():
         if m not in MACSE_TYPES:
             continue
 
-        pattern = os.path.join(macse_dir, f"{g}*_aligned_aa.fasta")
+        # ✅ Robust gene matching
+        matching_files = [
+            f for f in all_alignments
+            if g.lower() in os.path.basename(f).lower()
+        ]
 
-        for aln in glob.glob(pattern):
+        print(f"[INFO] {g}: matched {len(matching_files)} alignment(s)", file=sys.stderr)
+
+        for aln in matching_files:
             records = list(SeqIO.parse(aln, "fasta"))
 
             if len(records) < 2:
@@ -177,15 +188,20 @@ def main():
                     res = get_isolate_residue(anc, iso, s, e)
                     anc_res = get_isolate_residue(anc, anc, s, e)
 
-                    if res == x:
-                        present_exact[(g, s, e, m)] = 1
+                    # ✅ exact match logic (with fallback)
+                    if x is None:
+                        if confirm_any_missense(anc, iso, s, e):
+                            present_exact[(g, s, e, m)] = 1
+                    else:
+                        if res == x:
+                            present_exact[(g, s, e, m)] = 1
 
                     if confirm_any_missense(anc, iso, s, e):
                         present_any[(g, s, e, m)] = 1
 
                     if DEBUG:
                         print(
-                            f"DEBUG missense {g} {s}: anc='{anc_res}' iso='{res}' expected='{x}'",
+                            f"DEBUG {g} {s}: WT='{anc_res}' iso='{res}' expected='{x}'",
                             file=sys.stderr,
                         )
 
@@ -199,7 +215,10 @@ def main():
                                 file=sys.stderr,
                             )
 
+    # ============================================================
     # Output
+    # ============================================================
+
     print("gene\taa_start\taa_end\tmutation_type\tpresent\tany_missense")
 
     for g, s, e, m, _ in MUTATIONS:
