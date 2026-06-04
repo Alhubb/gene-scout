@@ -130,6 +130,5 @@ for gene_file in "$WT_GENES"/*.fasta "$WT_GENES"/*.fna; do
     echo "✅ Finished gene: $gene"
     echo
 done
-done
 
 echo "✅ Mapping complete"
