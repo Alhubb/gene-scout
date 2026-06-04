@@ -165,7 +165,7 @@ xargs -0 -r -n 1 -P "$THREADS" bash -c '
 done_ "MACSE complete"
 
 # ============================================================
-# 3. MUTATION SCAN (FIXED ✅)
+# 3. MUTATION SCAN
 # ============================================================
 
 step "3" "Scanning mutations"
