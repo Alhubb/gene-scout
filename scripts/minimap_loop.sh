@@ -86,32 +86,28 @@ echo "==============================="
 echo "Phase 2: Mapping genes ($THREADS parallel jobs)"
 echo "==============================="
 
-for gene in "$WT_GENES"/*.fasta "$WT_GENES"/*.fna; do
-    [ -f "$gene" ] || continue
+for gene_file in "$WT_GENES"/*.fasta "$WT_GENES"/*.fna; do
+    [ -f "$gene_file" ] || continue
 
-gene_file=$(basename "$gene")
-gene_name="${gene_file%.*}"
+    base=$(basename "$gene_file")
+    core="${base%.*}"
 
-# Optional: fallback if WT filename still contains lineage
-if [[ "$gene_name" == *_* ]]; then
-    gene="${gene_name%_*}"
-    lineage="${gene_name##*_}"
-else
-    gene="$gene_name"
-    lineage="unknown"
-fi
+    # Safe parsing
+    if [[ "$core" == *_* ]]; then
+        gene="${core%_*}"
+        lineage="${core##*_}"
+    else
+        gene="$core"
+        lineage="unknown"
+    fi
 
-outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
-
-    outdir="${OUTBASE}/${gene_base}_minimap_hits"
+    outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
     mkdir -p "$outdir"
 
-    echo "Processing gene: $gene_base"
+    echo "Processing gene: $gene (lineage=$lineage)"
 
-    # Write index paths that still need mapping to a temp file.
-    # Using a temp file avoids subshell variable-scoping issues
-    # under set -euo pipefail when using process substitution.
     tmplist=$(mktemp)
+
     for idx in "$INDEX_DIR"/*.mmi; do
         [ -f "$idx" ] || continue
         asm=$(basename "$idx" .mmi)
@@ -122,17 +118,18 @@ outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
     total=$(wc -l < "$tmplist")
     echo "  $total mappings to run"
 
-    # Run up to THREADS minimap2 processes simultaneously.
     xargs -a "$tmplist" -P "$THREADS" -I{} bash -c '
         idx="{}"
         asm=$(basename "$idx" .mmi)
         paf="'"$outdir"'/${asm}.paf"
-        minimap2 -x "'"$PRESET"'" -c "$idx" "'"$gene"'" > "$paf"
+        minimap2 -x "'"$PRESET"'" -c "$idx" "'"$gene_file"'" > "$paf"
     '
 
     rm -f "$tmplist"
-    echo "✅ Finished gene: $gene_base"
+
+    echo "✅ Finished gene: $gene"
     echo
+done
 done
 
 echo "✅ Mapping complete"
