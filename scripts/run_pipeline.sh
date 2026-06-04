@@ -40,9 +40,8 @@ if [ -z "${MUTATION_LIST:-}" ]; then
     done
 fi
 
-if [ -n "${MUTATION_LIST:-}" ] && [ ! -f "${MUTATION_LIST}" ]; then
-    echo "   ⚠  MUTATION_LIST not found at ${MUTATION_LIST} — disabling mutation steps"
-    MUTATION_LIST=""
+if [ -n "${MUTATION_LIST:-}" ]; then
+    echo "   ✅ Mutation list: $MUTATION_LIST"
 fi
 
 # ============================================================
