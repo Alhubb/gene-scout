@@ -15,15 +15,16 @@ for dir in "$PAF_BASE"/*_minimap_hits; do
     [ -d "$dir" ] || continue
 
     name=$(basename "$dir")
-core="${name%_minimap_hits}"
+    core="${name%_minimap_hits}"
 
-if [[ "$core" == *_* ]]; then
-    gene="${core%_*}"
-    lineage="${core##*_}"
-else
-    gene="$core"
-    lineage="unknown"
-fi
+    # ✅ SAFE PARSING
+    if [[ "$core" == *_* ]]; then
+        gene="${core%_*}"
+        lineage="${core##*_}"
+    else
+        gene="$core"
+        lineage="unknown"
+    fi
 
     outdir="${OUTBASE}/${gene}_${lineage}_minimap_hits"
     mkdir -p "$outdir"
@@ -37,7 +38,6 @@ fi
 
         asm=$(basename "$paf" .paf)
 
-        # Resolve assembly path — try extensions in order
         genome=""
         for ext in fna fasta fna.gz; do
             candidate="${GENOME_FASTA_DIR}/${asm}.${ext}"
