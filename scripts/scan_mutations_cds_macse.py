@@ -26,7 +26,7 @@ def load_mutations(tsv_file):
 
             gene = fields[0]
             start = int(fields[1])
-            end   = int(fields[2])
+            end = int(fields[2])
             mtype = fields[3]
 
             expected = None
@@ -37,14 +37,12 @@ def load_mutations(tsv_file):
 
     return mutations
 
-
 # ============================================================
 # Constants
 # ============================================================
 
 MACSE_TYPES = {"missense", "inframe_deletion", "delins"}
 DELINS_FLANK = 5
-
 
 # ============================================================
 # Alignment helpers
@@ -75,7 +73,6 @@ def get_alignment_columns(anc_seq, start, end):
         col_end += 1
 
     return col_start, col_end
-
 
 # ============================================================
 # Mutation logic
@@ -125,11 +122,9 @@ def confirm_indel(anc, iso, start, end, inserted=None):
         flank_end   = min(len(iso), c1 + DELINS_FLANK)
 
         iso_wide = iso[flank_start:flank_end].replace("-", "").replace("!", "")
-
         return inserted in iso_wide
 
     return True
-
 
 # ============================================================
 # Main
@@ -137,10 +132,7 @@ def confirm_indel(anc, iso, start, end, inserted=None):
 
 def main():
     if len(sys.argv) != 3:
-        sys.exit(
-            "Usage: scan_mutations_cds_macse.py "
-            "<macse_output_dir> <mutation_list.tsv>"
-        )
+        sys.exit("Usage: scan_mutations_cds_macse.py <macse_dir> <mutation_list.tsv>")
 
     macse_dir = sys.argv[1]
     mutation_file = sys.argv[2]
@@ -148,30 +140,35 @@ def main():
     MUTATIONS = load_mutations(mutation_file)
 
     if not MUTATIONS:
-        print("[ERROR] No valid mutations loaded", file=sys.stderr)
+        print("[ERROR] No mutations loaded", file=sys.stderr)
         sys.exit(1)
 
     print(f"[INFO] Loaded {len(MUTATIONS)} mutations", file=sys.stderr)
 
-    # Collect ALL alignment files once
+    # ✅ collect ALL alignments
     all_alignments = glob.glob(os.path.join(macse_dir, "*_aligned_aa.fasta"))
+    print(f"[INFO] Found {len(all_alignments)} alignment files", file=sys.stderr)
 
-    print(f"[INFO] Found {len(all_alignments)} total alignment files", file=sys.stderr)
-
+    # initialise results
     present_exact = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
     present_any   = {(g, s, e, m): 0 for g, s, e, m, _ in MUTATIONS}
 
+    # ============================================================
+    # Scan mutations
+    # ============================================================
+
     for g, s, e, m, x in MUTATIONS:
+
         if m not in MACSE_TYPES:
             continue
 
-        # ✅ Robust gene matching
+        # ✅ robust matching
         matching_files = [
             f for f in all_alignments
             if g.lower() in os.path.basename(f).lower()
         ]
 
-        print(f"[INFO] {g}: matched {len(matching_files)} alignment(s)", file=sys.stderr)
+        print(f"[INFO] {g}: matched {len(matching_files)} file(s)", file=sys.stderr)
 
         for aln in matching_files:
             records = list(SeqIO.parse(aln, "fasta"))
@@ -188,7 +185,6 @@ def main():
                     res = get_isolate_residue(anc, iso, s, e)
                     anc_res = get_isolate_residue(anc, anc, s, e)
 
-                    # ✅ exact match logic (with fallback)
                     if x is None:
                         if confirm_any_missense(anc, iso, s, e):
                             present_exact[(g, s, e, m)] = 1
@@ -201,19 +197,13 @@ def main():
 
                     if DEBUG:
                         print(
-                            f"DEBUG {g} {s}: WT='{anc_res}' iso='{res}' expected='{x}'",
-                            file=sys.stderr,
+                            f"DEBUG {g}:{s} WT='{anc_res}' iso='{res}' expected='{x}'",
+                            file=sys.stderr
                         )
 
                 elif m in ("inframe_deletion", "delins"):
                     if confirm_indel(anc, iso, s, e, x):
                         present_exact[(g, s, e, m)] = 1
-
-                        if DEBUG:
-                            print(
-                                f"DEBUG {m} {g} {s}-{e}: confirmed in {r.id}",
-                                file=sys.stderr,
-                            )
 
     # ============================================================
     # Output
@@ -224,10 +214,11 @@ def main():
     for g, s, e, m, _ in MUTATIONS:
         print(
             f"{g}\t{s}\t{e}\t{m}\t"
-            f"{present_exact.get((g,s,e,m), 0)}\t"
-            f"{present_any.get((g,s,e,m), 0)}"
+            f"{present_exact.get((g, s, e, m), 0)}\t"
+            f"{present_any.get((g, s, e, m), 0)}"
         )
 
+# ============================================================
 
 if __name__ == "__main__":
     main()
