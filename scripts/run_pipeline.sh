@@ -79,7 +79,7 @@ for dir in "$EXTRACTED"/*; do
     fi
 
     shopt -s nullglob
-    files=( "$dir"/*.fasta )
+    files=( "$dir"/*bakta.${gene}.fasta)
     shopt -u nullglob
 
     if [ ${#files[@]} -eq 0 ]; then
