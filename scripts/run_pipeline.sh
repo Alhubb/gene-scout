@@ -40,7 +40,6 @@ if [ -z "${MUTATION_LIST:-}" ]; then
     done
 fi
 
-# Final validation
 if [ -n "${MUTATION_LIST:-}" ] && [ ! -f "${MUTATION_LIST}" ]; then
     echo "   ⚠  MUTATION_LIST not found at ${MUTATION_LIST} — disabling mutation steps"
     MUTATION_LIST=""
@@ -62,33 +61,52 @@ step "1" "Building per-gene FASTAs"
 mkdir -p "$PER_GENE_FASTAS"
 
 built=0; skipped=0
+
 for dir in "$EXTRACTED"/*; do
     [ -d "$dir" ] || continue
 
     name=$(basename "$dir")
     core="${name%_minimap_hits}"
-    lineage="${core##*_}"
-    gene="${core%_*}"
 
-    wt_fasta="$WT/${gene}_${lineage}.fasta"
+    # ✅ SAFE PARSING
+    if [[ "$core" == *_* ]]; then
+        gene="${core%_*}"
+        lineage="${core##*_}"
+    else
+        gene="$core"
+        lineage="unknown"
+    fi
+
     out_fasta="$PER_GENE_FASTAS/${gene}_${lineage}.fasta"
 
+    # ✅ WT lookup with fallback
+    wt_fasta="$WT/${gene}_${lineage}.fasta"
     if [ ! -f "$wt_fasta" ]; then
-        warn "Missing WT for ${gene}_${lineage} — skipping"
-        skipped=$((skipped + 1)); continue
+        candidate="$WT/${gene}.fasta"
+        if [ -f "$candidate" ]; then
+            wt_fasta="$candidate"
+        else
+            warn "Missing WT for ${gene} (${lineage}) — skipping"
+            skipped=$((skipped + 1))
+            continue
+        fi
     fi
 
     shopt -s nullglob
-    files=( "$dir"/*bakta.${gene}.fasta)
+    files=( "$dir"/*bakta.${gene}.fasta )
     shopt -u nullglob
 
     if [ ${#files[@]} -eq 0 ]; then
         warn "No mutant CDS files in $dir — skipping"
-        skipped=$((skipped + 1)); continue
+        skipped=$((skipped + 1))
+        continue
     fi
 
-    { cat "$wt_fasta"; echo
-      for f in "${files[@]}"; do cat "$f"; echo; done
+    {
+        cat "$wt_fasta"; echo
+        for f in "${files[@]}"; do
+            cat "$f"; echo
+        done
     } > "$out_fasta"
 
     built=$((built + 1))
@@ -103,6 +121,7 @@ done_ "$built FASTAs built${skipped:+, $skipped skipped}"
 step "1.5" "Deduplicating FASTAs"
 mkdir -p "$PER_GENE_FASTAS_DEDUP"
 
+shopt -s nullglob
 for f in "$PER_GENE_FASTAS"/*.fasta; do
     base=$(basename "$f")
     out="$PER_GENE_FASTAS_DEDUP/$base"
@@ -112,6 +131,7 @@ for f in "$PER_GENE_FASTAS"/*.fasta; do
     n=$(grep -c "^>" "$out")
     echo "   ${base%.fasta}: $n unique variants"
 done
+shopt -u nullglob
 
 done_ "Deduplication complete"
 
@@ -152,34 +172,34 @@ done_ "MACSE complete"
 
 step "3" "Scanning mutations"
 
-python \
-    "$SCRIPTS/scan_mutations_cds_macse.py" \
+python "$SCRIPTS/scan_mutations_cds_macse.py" \
     "$MACSE_OUT" \
     > "$MACSE_SUMMARY"
 
 done_ "Summary written"
 
 # ============================================================
-# 4. STOP MUTATIONS (always runs — needed by screening step)
+# 4. STOP MUTATIONS
 # ============================================================
 
 step "4" "Detecting stop mutations"
 mkdir -p "$STOP_CALLS"
 > "$STOP_CALLS/stop_calls.tsv"
 
+shopt -s nullglob
 for f in "$PER_GENE_FASTAS"/*.fasta; do
-    python \
-        "$SCRIPTS/detect_stop_mutations.py" "$f" \
+    python "$SCRIPTS/detect_stop_mutations.py" "$f" \
         >> "$STOP_CALLS/stop_calls.tsv"
 done
+shopt -u nullglob
 
-awk 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' "$STOP_CALLS/stop_calls.tsv" \
-    | sort -u > "$STOP_GENES"
+awk 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' \
+    "$STOP_CALLS/stop_calls.tsv" | sort -u > "$STOP_GENES"
 
 done_ "Stop mutations complete"
 
 # ============================================================
-# 5–7 OPTIONAL STEPS (require mutation list)
+# OPTIONAL STEPS
 # ============================================================
 
 if [ -z "${MUTATION_LIST}" ]; then
@@ -189,33 +209,18 @@ if [ -z "${MUTATION_LIST}" ]; then
     > "$BASE/mutation_screen_results.tsv"
 else
 
-    # ---------- Step 5 ----------
     step "5" "Frameshift detection"
+    python "$SCRIPTS/detect_frameshifts_macse.py" \
+        "$MACSE_OUT" "$MUTATION_LIST" "$FRAMESHIFTS"
+    done_ "$(wc -l < "$FRAMESHIFTS") frameshift hits"
 
-    python \
-        "$SCRIPTS/detect_frameshifts_macse.py" \
-        "$MACSE_OUT" \
-        "$MUTATION_LIST" \
-        "$FRAMESHIFTS"
-
-    done_ "$(wc -l < "$FRAMESHIFTS") frameshift hits → $(basename "$FRAMESHIFTS")"
-
-    # ---------- Step 5.5 ----------
     step "5.5" "Indel detection"
+    python "$SCRIPTS/detect_indels_macse.py" \
+        "$MACSE_OUT" "$MUTATION_LIST" "$INDELS"
+    done_ "$(wc -l < "$INDELS") indel hits"
 
-    python \
-        "$SCRIPTS/detect_indels_macse.py" \
-        "$MACSE_OUT" \
-        "$MUTATION_LIST" \
-        "$INDELS"
-
-    done_ "$(wc -l < "$INDELS") indel hits → $(basename "$INDELS")"
-
-    # ---------- Step 6 ----------
     step "6" "Mutation screening"
-
-    python \
-        "$SCRIPTS/screen_mutations.py" \
+    python "$SCRIPTS/screen_mutations.py" \
         --mutations   "$MUTATION_LIST" \
         --macse       "$MACSE_SUMMARY" \
         --frameshifts "$FRAMESHIFTS" \
@@ -223,7 +228,7 @@ else
         --stops       "$STOP_GENES" \
         --output      "$BASE/mutation_screen_results.tsv"
 
-    done_ "Results → mutation_screen_results.tsv"
+    done_ "Mutation screening complete"
 fi
 
 # ============================================================
@@ -231,5 +236,5 @@ fi
 echo
 echo "══════════════════════════════════════════"
 echo "  ✅ PIPELINE COMPLETE"
-echo "  ➡  Output: $BASE/mutation_screen_results.tsv"
+echo "  ➡ Output: $BASE/mutation_screen_results.tsv"
 echo "══════════════════════════════════════════"
