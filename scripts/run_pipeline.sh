@@ -14,8 +14,11 @@ EXTRACTED="${EXTRACTED:-$BASE/extracted_genes}"
 WT="${WT_GENES:-${WT:-$BASE/WT_gene_fasta}}"
 PER_GENE_FASTAS="$BASE/per_gene_fastas"
 PER_GENE_FASTAS_DEDUP="$BASE/per_gene_fastas_dedup"
+PER_GENE_FASTAS_CLEAN="$BASE/per_gene_fastas_clean"
 MACSE_OUT="$BASE/macse_output"
+MACSE_OUT_CLEAN="$BASE/macse_output_clean"
 STOP_CALLS="$BASE/stop_calls"
+CONFIRMED_SEQS="$BASE/confirmed_sequences"
 
 MACSE_SUMMARY="$BASE/mutation_cds_macse_strict_summary.tsv"
 FRAMESHIFTS="$BASE/frameshifts.tsv"
@@ -133,15 +136,28 @@ shopt -u nullglob
 done_ "Deduplication complete"
 
 # ============================================================
-# 2. MACSE ALIGNMENT
+# 1.6 CLEAN PER-GENE FASTAs
+# Removes sequences that are too short, mostly gaps, or contain
+# non-IUPAC characters. Frameshifted and stop-codon sequences
+# are kept — they are handled by the detection scripts downstream.
 # ============================================================
+
+step "1.6" "Cleaning per-gene FASTAs"
+mkdir -p "$PER_GENE_FASTAS_CLEAN"
+
+python "$SCRIPTS/clean_gene_fastas.py" \
+    "$PER_GENE_FASTAS_DEDUP" \
+    "$PER_GENE_FASTAS_CLEAN" \
+    2>&1
+
+done_ "Cleaning complete → $(basename "$PER_GENE_FASTAS_CLEAN")"
 
 step "2" "Running MACSE alignment"
 mkdir -p "$MACSE_OUT"
 
 THREADS="${THREADS:-4}"
 
-find "$PER_GENE_FASTAS_DEDUP" -maxdepth 1 -name "*.fasta" -print0 | \
+find "$PER_GENE_FASTAS_CLEAN" -maxdepth 1 -name "*.fasta" -print0 | \
 xargs -0 -r -n 1 -P "$THREADS" bash -c '
     set -e
     f="$1"
@@ -164,6 +180,33 @@ xargs -0 -r -n 1 -P "$THREADS" bash -c '
 done_ "MACSE complete"
 
 # ============================================================
+# 2.5 CLEAN MACSE ALIGNMENTS
+# Removes sequences that MACSE rendered as near-entirely gaps
+# after codon-aware alignment (< 50% of ancestor ungapped length).
+# For stop_lost genes, also removes sequences too short to reach
+# the WT stop position. Both AA and NT files cleaned in lockstep.
+# All downstream steps use MACSE_OUT_CLEAN.
+# ============================================================
+
+step "2.5" "Cleaning MACSE alignments"
+mkdir -p "$MACSE_OUT_CLEAN"
+
+# Derive stop_lost gene names from mutation list if available
+STOP_LOST_GENES=""
+if [ -n "${MUTATION_LIST:-}" ]; then
+    STOP_LOST_GENES=$(awk -F'\t' '$4=="stop_lost" {print $1}' "$MUTATION_LIST" \
+        | sort -u | paste -sd,)
+fi
+
+python "$SCRIPTS/clean_macse_alignments.py" \
+    "$MACSE_OUT" \
+    "$MACSE_OUT_CLEAN" \
+    ${STOP_LOST_GENES:+--stop-lost-genes "$STOP_LOST_GENES"} \
+    2>&1
+
+done_ "MACSE cleaning complete → $(basename "$MACSE_OUT_CLEAN")"
+
+# ============================================================
 # 3. MUTATION SCAN
 # ============================================================
 
@@ -174,7 +217,7 @@ if [ -z "${MUTATION_LIST}" ]; then
     > "$MACSE_SUMMARY"
 else
     python "$SCRIPTS/scan_mutations_cds_macse.py" \
-        "$MACSE_OUT" \
+        "$MACSE_OUT_CLEAN" \
         "$MUTATION_LIST" \
         > "$MACSE_SUMMARY"
 fi
@@ -190,7 +233,7 @@ mkdir -p "$STOP_CALLS"
 > "$STOP_CALLS/stop_calls.tsv"
 
 shopt -s nullglob
-for f in "$PER_GENE_FASTAS"/*.fasta; do
+for f in "$PER_GENE_FASTAS_CLEAN"/*.fasta; do
     if [ -n "${MUTATION_LIST:-}" ]; then
         python "$SCRIPTS/detect_stop_mutations.py" "$f" "$MUTATION_LIST" \
             >> "$STOP_CALLS/stop_calls.tsv"
@@ -219,12 +262,12 @@ else
 
     step "5" "Frameshift detection"
     python "$SCRIPTS/detect_frameshifts_macse.py" \
-        "$MACSE_OUT" "$MUTATION_LIST" "$FRAMESHIFTS"
+        "$MACSE_OUT_CLEAN" "$MUTATION_LIST" "$FRAMESHIFTS"
     done_ "$(wc -l < "$FRAMESHIFTS") frameshift hits"
 
     step "5.5" "Indel detection"
     python "$SCRIPTS/detect_indels_macse.py" \
-        "$MACSE_OUT" "$MUTATION_LIST" "$INDELS"
+        "$MACSE_OUT_CLEAN" "$MUTATION_LIST" "$INDELS"
     done_ "$(wc -l < "$INDELS") indel hits"
 
     step "6" "Mutation screening"
@@ -235,8 +278,28 @@ else
         --indels      "$INDELS" \
         --stops       "$STOP_GENES" \
         --output      "$BASE/mutation_screen_results.tsv"
-
     done_ "Mutation screening complete"
+
+    step "7" "Extracting confirmed sequences"
+    mkdir -p "$CONFIRMED_SEQS"
+    python "$SCRIPTS/extract_confirmed_sequences.py" \
+        "$MACSE_OUT_CLEAN" \
+        "$MACSE_SUMMARY" \
+        "$MUTATION_LIST" \
+        "$CONFIRMED_SEQS" \
+        --frameshifts     "$FRAMESHIFTS" \
+        --stops           "$STOP_GENES" \
+        --per-gene-fastas "$PER_GENE_FASTAS_CLEAN" \
+        --screen-results  "$BASE/mutation_screen_results.tsv" \
+        --any
+    done_ "Confirmed sequences → $(basename "$CONFIRMED_SEQS")"
+
+    step "8" "Counting confirmed evidence"
+    python "$SCRIPTS/count_confirmed_evidence.py" \
+        "$CONFIRMED_SEQS" \
+        "$CONFIRMED_SEQS/confirmed_evidence_counts.tsv"
+    done_ "Evidence counts → confirmed_evidence_counts.tsv"
+
 fi
 
 # ============================================================
