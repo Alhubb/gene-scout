@@ -136,19 +136,27 @@ def read_indel_hits(path):
     return exact_deletion_hits, regional_hits, gene_hits
 
 
-def read_stop_pairs(path):
+def read_stop_hits(path):
     """
-    Read stop_genes.tsv — three columns: gene_name  isolate_id  event_type.
-    Returns a set of (gene_name, event_type) tuples for matching against the
-    mutation list. event_type is normalised to 'stop_gained' or 'stop_lost'.
+    Read stop_genes.tsv. Handles two formats:
+
+    New format (4 columns): gene  aa_position  tier  isolate_id
+      Written by the updated detect_stop_mutations.py. Supports full
+      exact/regional/gene tiering.
+
+    Old format (3 columns): gene  isolate_id  event_type
+      Written by the original detect_stop_mutations.py. All hits are
+      assigned to the gene tier since no position information is available.
+
+    Returns:
+      exact_hits    — set of (gene, aa_position) tuples
+      regional_hits — set of (gene, aa_position) tuples
+      gene_hits     — set of gene names
     """
-    pairs = set()
-    _normalise = {
-        "stop_gain":   "stop_gained",
-        "stop_gained": "stop_gained",
-        "stop_loss":   "stop_lost",
-        "stop_lost":   "stop_lost",
-    }
+    exact_hits    = set()
+    regional_hits = set()
+    gene_hits     = set()
+
     try:
         with open(path) as fh:
             for line in fh:
@@ -156,31 +164,39 @@ def read_stop_pairs(path):
                 if not line:
                     continue
                 parts = line.split("\t")
-                if len(parts) < 3:
-                    continue
-                gene  = parts[0].strip()
-                event = _normalise.get(parts[2].strip(), parts[2].strip())
-                pairs.add((gene, event))
+
+                if len(parts) >= 4:
+                    # New format: gene  aa_position  tier  isolate_id
+                    gene = parts[0].strip()
+                    try:
+                        pos = int(parts[1].strip())
+                    except ValueError:
+                        continue
+                    tier = parts[2].strip()
+                    if tier == "exact":
+                        exact_hits.add((gene, pos))
+                    elif tier == "regional":
+                        regional_hits.add((gene, pos))
+                    else:
+                        gene_hits.add(gene)
+                elif len(parts) == 3:
+                    # Old format: gene  isolate_id  event_type — assign to gene tier
+                    gene_hits.add(parts[0].strip())
+
     except FileNotFoundError:
         print(f"WARNING: {path} not found", file=sys.stderr)
-    return pairs
+
+    return exact_hits, regional_hits, gene_hits
 
 
-def normalise_stop_type(mut_type):
-    """Normalise stop mutation type strings for consistent matching."""
-    return {
-        "stop_gain":   "stop_gained",
-        "stop_gained": "stop_gained",
-        "stop_loss":   "stop_lost",
-        "stop_lost":   "stop_lost",
-    }.get(mut_type, mut_type)
+REGIONAL_WINDOW = 20  # must match detect_frameshifts_macse.py and detect_stop_mutations.py
 
 
 def main(args):
-    macse_exact, macse_any          = read_macse_hits(args.macse)
-    fs_exact, fs_regional, fs_gene  = read_frameshift_hits(args.frameshifts)
+    macse_exact, macse_any               = read_macse_hits(args.macse)
+    fs_exact, fs_regional, fs_gene       = read_frameshift_hits(args.frameshifts)
     ind_exact_del, ind_regional, ind_gene = read_indel_hits(args.indels)
-    stop_pairs                      = read_stop_pairs(args.stops)
+    stop_exact, stop_regional, stop_gene  = read_stop_hits(args.stops)
 
     out = open(args.output, "w") if args.output else sys.stdout
 
@@ -190,7 +206,8 @@ def main(args):
         "macse_strict", "macse_any_missense",
         "exact_frameshift", "regional_frameshift", "gene_frameshift",
         "exact_deletion", "regional_indel", "gene_indel",
-        "stop_confirmed", "final_confirmed",
+        "exact_stop", "regional_stop", "gene_stop",
+        "final_confirmed",
     ])
 
     try:
@@ -210,7 +227,12 @@ def main(args):
                     )
                     continue
 
-                norm_type = normalise_stop_type(mut_type)
+                norm_type = {
+                    "stop_gain":   "stop_gained",
+                    "stop_gained": "stop_gained",
+                    "stop_loss":   "stop_lost",
+                    "stop_lost":   "stop_lost",
+                }.get(mut_type, mut_type)
                 macse_key = (gene, aa_start, aa_end, mut_type)
 
                 # MACSE: exact residue match or indel confirmed
@@ -225,7 +247,8 @@ def main(args):
                 is_fs = mut_type == "frameshift"
                 exact_fs    = int(is_fs and (gene, aa_start) in fs_exact)
                 regional_fs = int(is_fs and not exact_fs
-                                  and any(g == gene for g, _ in fs_regional))
+                                  and any(g == gene and abs(p - aa_start) <= REGIONAL_WINDOW
+                                          for g, p in fs_regional))
                 gene_fs     = int(is_fs and not exact_fs and not regional_fs
                                   and gene in fs_gene)
 
@@ -239,17 +262,20 @@ def main(args):
                                    and not regional_ind
                                    and gene in ind_gene)
 
-                # Stop: match on (gene_name, normalised_event_type)
-                stop_confirmed = int(
-                    norm_type in ("stop_gained", "stop_lost")
-                    and (gene, norm_type) in stop_pairs
-                )
+                # Stop tiers (stop_gained and stop_lost only)
+                is_stop = norm_type in ("stop_gained", "stop_lost")
+                exact_stop    = int(is_stop and (gene, aa_start) in stop_exact)
+                regional_stop = int(is_stop and not exact_stop
+                                    and any(g == gene and abs(p - aa_start) <= REGIONAL_WINDOW
+                                            for g, p in stop_regional))
+                gene_stop     = int(is_stop and not exact_stop and not regional_stop
+                                    and gene in stop_gene)
 
                 final = int(bool(
                     macse_strict or macse_any_missense
                     or exact_fs or regional_fs or gene_fs
                     or exact_del or regional_ind or gene_ind
-                    or stop_confirmed
+                    or exact_stop or regional_stop or gene_stop
                 ))
 
                 writer.writerow([
@@ -257,7 +283,8 @@ def main(args):
                     macse_strict, macse_any_missense,
                     exact_fs, regional_fs, gene_fs,
                     exact_del, regional_ind, gene_ind,
-                    stop_confirmed, final,
+                    exact_stop, regional_stop, gene_stop,
+                    final,
                 ])
     finally:
         if args.output:

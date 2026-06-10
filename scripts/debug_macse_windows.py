@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 """
-debug_macse_windows.py  <macse_output_dir>
+debug_macse_windows.py  <macse_output_dir>  <mutation_list.tsv>
 
 Prints the ancestor and isolate residues at each missense/delins window
-so you can see exactly what amino acids are present before deciding on
-the expected values in scan_mutations_cds_macse.py.
+defined in the mutation list so you can verify what amino acids are
+present in the alignment before troubleshooting scan_mutations_cds_macse.py.
 
 Usage:
-    python debug_macse_windows.py /home/alasdair/3D_UHU_evo_analysis/macse_output
+    python debug_macse_windows.py <macse_output_dir> <mutation_list.tsv>
 """
 
 import os
 import sys
+import csv
 import glob
 from collections import Counter
 from Bio import SeqIO
-
-# Only the mutations where we need to inspect the actual residues.
-# (gene, aa_start, aa_end, mutation_type, currently_expected)
-INSPECT = [
-    ("glpT", 164, 164, "missense", "V"),
-    ("cyaA", 394, 394, "missense", "D"),
-    ("glpT", 182, 187, "delins",   "C"),
-]
 
 
 def ungapped_to_alignment_index(seq, pos):
@@ -49,13 +42,38 @@ def get_alignment_columns(anc_seq, start, end):
     return col_start, col_end
 
 
+def load_inspect(mutation_file):
+    """Load missense and delins entries from the mutation list."""
+    inspect = []
+    with open(mutation_file) as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            mtype = row.get("mutation_type", "").strip()
+            if mtype not in ("missense", "delins"):
+                continue
+            gene = row.get("gene", "").strip()
+            try:
+                s = int(row["aa_start"])
+                e = int(row["aa_end"])
+            except (KeyError, ValueError):
+                continue
+            expected = row.get("expected", "").strip() or None
+            inspect.append((gene, s, e, mtype, expected))
+    return inspect
+
+
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("Usage: debug_macse_windows.py <macse_output_dir>")
+    if len(sys.argv) != 3:
+        sys.exit("Usage: debug_macse_windows.py <macse_output_dir> <mutation_list.tsv>")
 
-    macse_dir = sys.argv[1]
+    macse_dir     = sys.argv[1]
+    mutation_file = sys.argv[2]
 
-    for g, s, e, m, expected in INSPECT:
+    inspect = load_inspect(mutation_file)
+    if not inspect:
+        sys.exit("No missense or delins mutations found in mutation list.")
+
+    for g, s, e, m, expected in inspect:
         print(f"\n{'='*60}")
         print(f"Gene={g}  positions={s}-{e}  type={m}  expected='{expected}'")
         print(f"{'='*60}")
@@ -67,7 +85,6 @@ def main():
             print(f"  ⚠  No alignment files found matching {pattern}")
             continue
 
-        # Collect all isolate windows across all alignment files
         iso_windows = Counter()
         anc_window_shown = False
         n_isolates = 0
@@ -86,11 +103,10 @@ def main():
 
             if not anc_window_shown:
                 anc_w = anc[c0:c1].replace("-", "").replace("!", "")
-                print(f"  Ancestor residues at pos {s}-{e}: '{anc_w}'")
-                # Also show a slightly wider window for context
                 ctx_start = max(0, c0 - 3)
                 ctx_end   = min(len(anc), c1 + 3)
-                anc_ctx = anc[ctx_start:ctx_end].replace("-","").replace("!","")
+                anc_ctx = anc[ctx_start:ctx_end].replace("-", "").replace("!", "")
+                print(f"  Ancestor residues at pos {s}-{e}: '{anc_w}'")
                 print(f"  Ancestor context (±3 aa):       '{anc_ctx}'")
                 anc_window_shown = True
 
@@ -100,26 +116,20 @@ def main():
                 iso_windows[iso_w] += 1
                 n_isolates += 1
 
-        print(f"\n  Isolate residues at this window ({n_isolates} total isolates):")
-        print(f"  {'Residues':<30} {'Count':>6}  {'% of isolates':>14}")
-        print(f"  {'-'*54}")
+        print(f"\n  Isolate residues at this window ({n_isolates} total):")
+        print(f"  {'Residues':<30} {'Count':>6}  {'%':>8}")
+        print(f"  {'-'*50}")
         for residues, count in iso_windows.most_common(20):
             pct = 100 * count / n_isolates if n_isolates else 0
             marker = "  ← expected" if residues == expected else ""
-            print(f"  {residues:<30} {count:>6}  {pct:>13.1f}%{marker}")
+            print(f"  {residues:<30} {count:>6}  {pct:>7.1f}%{marker}")
 
-        if n_isolates > 20:
-            remaining = len(iso_windows) - 20
-            if remaining > 0:
-                print(f"  ... and {remaining} more unique residue combinations")
+        if len(iso_windows) > 20:
+            print(f"  ... and {len(iso_windows) - 20} more unique combinations")
 
-        # For delins: show how many isolates have gaps in the window
         if m == "delins":
-            print(f"\n  Delins check — isolates with gaps in window:")
-            gap_count = sum(
-                c for w, c in iso_windows.items() if "-" in w or "!" in w
-            )
-            print(f"  {gap_count} / {n_isolates} isolates have gaps at positions {s}-{e}")
+            gap_count = sum(c for w, c in iso_windows.items() if "-" in w or "!" in w)
+            print(f"\n  Delins check: {gap_count}/{n_isolates} isolates have gaps at positions {s}-{e}")
 
 
 if __name__ == "__main__":

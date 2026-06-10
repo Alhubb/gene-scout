@@ -43,6 +43,10 @@ from Bio import SeqIO
 # Window (in residues) either side of expected position for Tier 2
 REGIONAL_WINDOW = 20
 
+# Maximum residues a gap may extend beyond the called window and still
+# qualify as exact_deletion. Larger gaps are downgraded to regional.
+EXACT_FLANK = 2
+
 
 # ============================================================
 # Alignment helpers
@@ -202,9 +206,34 @@ def main():
                                        if a not in ("-", "!"))
                     if (anc_ungapped >= expected_del * 0.8
                             and iso_gaps >= expected_del):
-                        results.append((gene, expected_centre, "exact_deletion", rec.id))
-                        tier1 += 1
-                        continue
+
+                        # Scope gap checks to only gaps near the called window.
+                        # Gaps entirely outside the window are independent events
+                        # and must not veto a valid window match.
+                        window_gaps = [
+                            (gap_start, gap_count)
+                            for gap_start, gap_count in indel_pos
+                            if expected_start - EXACT_FLANK <= gap_start <= expected_end + EXACT_FLANK
+                        ]
+
+                        gap_start_ok = any(
+                            expected_start <= gs <= expected_end
+                            for gs, _ in window_gaps
+                        )
+                        gap_not_upstream = all(
+                            gs >= expected_start - EXACT_FLANK
+                            for gs, _ in window_gaps
+                        )
+                        gap_not_oversized = all(
+                            gc <= expected_del + EXACT_FLANK
+                            for gs, gc in window_gaps
+                            if expected_start <= gs <= expected_end
+                        )
+
+                        if gap_start_ok and gap_not_upstream and gap_not_oversized:
+                            results.append((gene, expected_centre, "exact_deletion", rec.id))
+                            tier1 += 1
+                            continue
 
                 # Tier 2 — regional: any gap within ±REGIONAL_WINDOW
                 regional = [(p, g) for p, g in indel_pos

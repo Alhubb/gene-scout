@@ -35,18 +35,10 @@ Note on double-counting:
 import os
 import sys
 import glob
+import argparse
 from collections import defaultdict
 from Bio import SeqIO
 from Bio.Seq import Seq
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-BASE        = "/home/alasdair/3D_UHU_evo_analysis"
-FASTA_DIR   = f"{BASE}/per_gene_fastas_dedup"
-MACSE_DIR   = f"{BASE}/macse_output"
-OUT_FILE    = f"{BASE}/mutation_spectrum_per_gene.tsv"
 
 CATEGORIES = [
     "frameshift",
@@ -70,9 +62,9 @@ def clean_nt(seq_str):
 
 
 def translate(nt_str):
-    """Translate a nucleotide string, trimming to multiple of 3 first."""
+    """Translate using bacterial genetic code (table 11)."""
     seq = nt_str if len(nt_str) % 3 == 0 else nt_str[:-(len(nt_str) % 3)]
-    return str(Seq(seq).translate(table=1))
+    return str(Seq(seq).translate(table=11))
 
 
 def classify_cds(wt_nt, wt_aa, wt_stop, iso_nt_raw):
@@ -219,29 +211,34 @@ def pass2_macse(macse_dir):
 # ============================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Count mutation types per gene from CDS FASTAs and MACSE alignments"
+    )
+    parser.add_argument("fasta_dir", help="per_gene_fastas_dedup/ directory")
+    parser.add_argument("macse_dir", help="macse_output/ directory")
+    parser.add_argument("output",    help="Output TSV file path")
+    args = parser.parse_args()
+
     print("Pass 1: classifying CDS sequences...", file=sys.stderr)
-    cds_counts = pass1_cds(FASTA_DIR)
+    cds_counts = pass1_cds(args.fasta_dir)
 
     print("Pass 2: scanning MACSE AA alignments for indels...", file=sys.stderr)
-    macse_counts = pass2_macse(MACSE_DIR)
+    macse_counts = pass2_macse(args.macse_dir)
 
-    # Merge: all gene_refs from either source
     all_gene_refs = sorted(set(cds_counts.keys()) | set(macse_counts.keys()))
 
-    with open(OUT_FILE, "w") as out:
+    with open(args.output, "w") as out:
         out.write("\t".join(["gene_ref"] + CATEGORIES) + "\n")
-
         for gene_ref in all_gene_refs:
             row = [gene_ref]
             for cat in CATEGORIES:
-                # inframe_deletion, inframe_insertion, delins from MACSE
                 if cat in ("inframe_deletion", "inframe_insertion", "delins"):
                     row.append(str(macse_counts[gene_ref].get(cat, 0)))
                 else:
                     row.append(str(cds_counts[gene_ref].get(cat, 0)))
             out.write("\t".join(row) + "\n")
 
-    print(f"✅ {OUT_FILE} written ({len(all_gene_refs)} gene/lineage combinations)",
+    print(f"✅ {args.output} written ({len(all_gene_refs)} gene/lineage combinations)",
           file=sys.stderr)
 
 

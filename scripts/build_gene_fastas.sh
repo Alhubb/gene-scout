@@ -1,9 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-BASE="/home/alasdair/3D_UHU_evo_analysis"
-EXTRACTED="$BASE/extracted_genes"
-WT="$BASE/WT_gene_fasta"
+# Paths are passed as environment variables by gene-scout / run_pipeline.sh.
+# They can also be set manually:
+#   export BASE=... EXTRACTED=... WT_GENES=...
+#   bash build_gene_fastas.sh
+
+BASE="${BASE:?Need BASE — set via gene-scout or export BASE=...}"
+EXTRACTED="${EXTRACTED:-$BASE/extracted_genes}"
+WT="${WT_GENES:-$BASE/WT_gene_fasta}"
 OUT="$BASE/per_gene_fastas"
 
 mkdir -p "$OUT"

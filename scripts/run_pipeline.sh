@@ -191,8 +191,13 @@ mkdir -p "$STOP_CALLS"
 
 shopt -s nullglob
 for f in "$PER_GENE_FASTAS"/*.fasta; do
-    python "$SCRIPTS/detect_stop_mutations.py" "$f" \
-        >> "$STOP_CALLS/stop_calls.tsv"
+    if [ -n "${MUTATION_LIST:-}" ]; then
+        python "$SCRIPTS/detect_stop_mutations.py" "$f" "$MUTATION_LIST" \
+            >> "$STOP_CALLS/stop_calls.tsv"
+    else
+        python "$SCRIPTS/detect_stop_mutations.py" "$f" \
+            >> "$STOP_CALLS/stop_calls.tsv"
+    fi
 done
 shopt -u nullglob
 

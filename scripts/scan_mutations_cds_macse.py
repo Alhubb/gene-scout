@@ -174,10 +174,18 @@ def main():
         if m not in MACSE_TYPES:
             continue
 
+        # Match alignment files by gene name prefix with underscore boundary
+        # e.g. 'cyaA' matches 'cyaA_34_aligned_aa.fasta' but NOT 'cyaABC_34...'
+        # Falls back to case-insensitive substring only if no prefix hits found.
         matching_files = [
             f for f in all_alignments
-            if g.lower() in os.path.basename(f).lower()
+            if os.path.basename(f).startswith(g + "_")
         ]
+        if not matching_files:
+            matching_files = [
+                f for f in all_alignments
+                if g.lower() in os.path.basename(f).lower()
+            ]
 
         print(f"[INFO] {g}: matched {len(matching_files)} file(s)", file=sys.stderr)
 
