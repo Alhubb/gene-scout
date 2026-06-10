@@ -144,11 +144,15 @@ def confirm_indel(anc, iso, start, end, inserted=None):
 # ============================================================
 
 def main():
-    if len(sys.argv) != 3:
-        sys.exit("Usage: scan_mutations_cds_macse.py <macse_dir> <mutation_list.tsv>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = [a for a in sys.argv[1:] if a.startswith("--")]
 
-    macse_dir = sys.argv[1]
-    mutation_file = sys.argv[2]
+    if len(args) != 2:
+        sys.exit("Usage: scan_mutations_cds_macse.py <macse_dir> <mutation_list.tsv> [--debug]")
+
+    macse_dir     = args[0]
+    mutation_file = args[1]
+    debug         = "--debug" in flags
 
     MUTATIONS = load_mutations(mutation_file)
 
@@ -196,6 +200,10 @@ def main():
                 continue
 
             anc = str(records[0].seq)
+
+            if debug:
+                print(f"DEBUG {g}: using '{records[0].id}' as ancestor in {os.path.basename(aln)}",
+                      file=sys.stderr)
 
             for r in records[1:]:
                 iso = str(r.seq)
