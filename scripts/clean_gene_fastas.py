@@ -74,7 +74,7 @@ def parse_fasta(path):
 def write_fasta(records, path):
     with open(path, "w") as fh:
         for header, seq in records:
-            fh.write(f">{header}\n{seq}\n")
+            fh.write(f">{header}\n{seq.upper()}\n")
 
 
 def clean_seq(seq):

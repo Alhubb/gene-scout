@@ -38,14 +38,21 @@ for dir in "$PAF_BASE"/*_minimap_hits; do
 
         asm=$(basename "$paf" .paf)
 
+        # asm may be the full genome filename including extension
+        # (e.g. 34A.fasta from 34A.fasta.paf) or just the stem (e.g. 34A).
+        # Try the direct filename first, then fall back to appending extensions.
         genome=""
-        for ext in fna fasta fna.gz; do
-            candidate="${GENOME_FASTA_DIR}/${asm}.${ext}"
-            if [ -f "$candidate" ]; then
-                genome="$candidate"
-                break
-            fi
-        done
+        if [ -f "${GENOME_FASTA_DIR}/${asm}" ]; then
+            genome="${GENOME_FASTA_DIR}/${asm}"
+        else
+            for ext in fna fasta fna.gz; do
+                candidate="${GENOME_FASTA_DIR}/${asm}.${ext}"
+                if [ -f "$candidate" ]; then
+                    genome="$candidate"
+                    break
+                fi
+            done
+        fi
 
         if [ -z "$genome" ]; then
             echo "WARNING: Assembly not found for $asm, skipping"

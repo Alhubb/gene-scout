@@ -39,9 +39,11 @@ from Bio.Seq import Seq
 def load_confirmed(summary_file, include_any=False):
     """
     Returns (confirmed, any_hits, strict_only) where:
-      confirmed   — keys to extract (macse_strict=1, plus any_missense=1 if include_any)
-      any_hits    — keys where any_missense=1 (superset may overlap strict)
-      strict_only — keys where macse_strict=1 but any_missense=0
+      confirmed   — keys to extract (exact_missense=1 or macse_indel_confirmed=1,
+                    plus any_missense=1 if include_any)
+      any_hits    — keys where any_missense=1
+      strict_only — keys where exact_missense=1 or macse_indel_confirmed=1
+                    but any_missense=0
     """
     strict_hits = set()
     any_hits    = set()
@@ -52,8 +54,14 @@ def load_confirmed(summary_file, include_any=False):
                 try:
                     key = (row["gene"].strip(), int(row["aa_start"]),
                            int(row["aa_end"]), row["mutation_type"].strip())
-                    if int(row.get("confirmed", 0)):
-                        strict_hits.add(key)
+                    mut_type = row["mutation_type"].strip()
+                    # exact_missense for missense, macse_indel_confirmed for indels
+                    if mut_type == "missense":
+                        if int(row.get("exact_missense", 0)):
+                            strict_hits.add(key)
+                    elif mut_type in ("inframe_deletion", "delins"):
+                        if int(row.get("macse_indel_confirmed", 0)):
+                            strict_hits.add(key)
                     if int(row.get("any_missense", 0)):
                         any_hits.add(key)
                 except (KeyError, ValueError):

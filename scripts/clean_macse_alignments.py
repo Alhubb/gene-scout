@@ -208,11 +208,27 @@ def main():
         total_removed += n_removed
 
         aa_out = os.path.join(out_dir, base)
-        write_fasta([(anc_aa_header, anc_aa_seq)] + kept_aa, aa_out)
+
+        # Strip single leading ! MACSE artefacts.
+        # MACSE occasionally inserts a spurious ! at alignment position 1 for
+        # isolates that are otherwise intact — caused by global optimisation
+        # rather than a genuine frameshift. This shifts all downstream AA
+        # positions by 1, causing missense detection to look at the wrong
+        # residue. Only a single leading ! is stripped; multiple consecutive
+        # ! at the start indicate a genuine frameshift and are left intact.
+        def strip_leading_bang(seq):
+            if seq.startswith("!") and not seq.startswith("!!"):
+                return seq[1:]
+            return seq
+
+        cleaned_aa = [(h, strip_leading_bang(s)) for h, s in kept_aa]
+        cleaned_nt = [(h, strip_leading_bang(s)) for h, s in kept_nt]
+
+        write_fasta([(anc_aa_header, anc_aa_seq)] + cleaned_aa, aa_out)
 
         anc_nt_header, anc_nt_seq = nt_records[0]
         nt_out = os.path.join(out_dir, f"{gene_ref}_aligned_nt.fasta")
-        write_fasta([(anc_nt_header, anc_nt_seq)] + kept_nt, nt_out)
+        write_fasta([(anc_nt_header, anc_nt_seq)] + cleaned_nt, nt_out)
 
         if n_removed > 0:
             print(f"  {gene_ref}: {n_in} → {n_kept} (removed {n_removed})",

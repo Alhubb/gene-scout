@@ -90,25 +90,51 @@ def get_alignment_columns(anc_seq, start, end):
 # Mutation logic
 # ============================================================
 
+# Positional tolerance for missense detection — number of residues either
+# side of the called position to search. Handles off-by-one shifts from
+# MACSE inserting a spurious ! at alignment position 1 for some isolates,
+# which shifts all downstream positions by 1 in the ungapped coordinate system.
+POSITION_TOLERANCE = 2
+
+
 def confirm_any_missense(anc, iso, start, end):
-    c0, c1 = get_alignment_columns(anc, start, end)
-    if c0 is None:
-        return False
-
-    anc_w = anc[c0:c1].replace("-", "").replace("!", "")
-    iso_w = iso[c0:c1].replace("-", "").replace("!", "")
-
-    if not iso_w:
-        return False
-
-    return anc_w != iso_w
+    """
+    Return True if ANY amino-acid difference exists within ±POSITION_TOLERANCE
+    of the called position. Handles MACSE leading ! artefacts that shift
+    positions by 1. Returns False if no difference found in any position checked.
+    """
+    for offset in range(-POSITION_TOLERANCE, POSITION_TOLERANCE + 1):
+        s = max(1, start + offset)
+        e = max(1, end + offset)
+        c0, c1 = get_alignment_columns(anc, s, e)
+        if c0 is None:
+            continue
+        anc_w = anc[c0:c1].replace("-", "").replace("!", "")
+        iso_w = iso[c0:c1].replace("-", "").replace("!", "")
+        if not iso_w:
+            continue
+        if anc_w != iso_w:
+            return True
+    return False
 
 
 def get_isolate_residue(anc, iso, start, end):
-    c0, c1 = get_alignment_columns(anc, start, end)
-    if c0 is None:
-        return "?"
-    return iso[c0:c1].replace("-", "").replace("!", "")
+    """
+    Return isolate residue at the called position.
+    Falls back within ±POSITION_TOLERANCE if exact position maps to a gap.
+    """
+    for offset in range(0, POSITION_TOLERANCE + 1):
+        for s, e in [(start + offset, end + offset),
+                     (start - offset, end - offset)]:
+            s = max(1, s)
+            e = max(1, e)
+            c0, c1 = get_alignment_columns(anc, s, e)
+            if c0 is None:
+                continue
+            res = iso[c0:c1].replace("-", "").replace("!", "")
+            if res:
+                return res
+    return "?"
 
 
 def confirm_indel(anc, iso, start, end, inserted=None):
@@ -209,42 +235,61 @@ def main():
                 iso = str(r.seq)
 
                 if m == "missense":
-                    res = get_isolate_residue(anc, iso, s, e)
-                    anc_res = get_isolate_residue(anc, anc, s, e)
+                    # Single unified tolerance search — find the offset where
+                    # the isolate differs from the ancestor, then use that same
+                    # offset for both any_missense and exact_missense checks.
+                    # This ensures both columns are consistent when a leading !
+                    # artefact shifts all positions by 1.
+                    best_res = None
+                    found_any = False
+                    for offset in range(-POSITION_TOLERANCE, POSITION_TOLERANCE + 1):
+                        os_ = max(1, s + offset)
+                        oe  = max(1, e + offset)
+                        c0, c1 = get_alignment_columns(anc, os_, oe)
+                        if c0 is None:
+                            continue
+                        anc_w = anc[c0:c1].replace("-", "").replace("!", "")
+                        iso_w = iso[c0:c1].replace("-", "").replace("!", "")
+                        if not iso_w:
+                            continue
+                        if anc_w != iso_w:
+                            found_any = True
+                            best_res = iso_w
+                            break
 
-                    # ✅ exact match OR fallback if no expected AA
-                    if x is None:
-                        if confirm_any_missense(anc, iso, s, e):
-                            present_exact[(g, s, e, m)] = 1
-                    else:
-                        if res == x:
-                            present_exact[(g, s, e, m)] = 1
-
-                    if confirm_any_missense(anc, iso, s, e):
+                    if found_any:
                         present_any[(g, s, e, m)] = 1
+                        if x is None or best_res == x:
+                            present_exact[(g, s, e, m)] = 1
 
-                    if DEBUG:
+                    if debug:
+                        anc_res = get_isolate_residue(anc, anc, s, e)
                         print(
-                            f"DEBUG {g}:{s} WT='{anc_res}' iso='{res}' expected='{x}'",
+                            f"DEBUG {g}:{s} WT='{anc_res}' iso='{best_res}' expected='{x}' "
+                            f"any={found_any} exact={present_exact.get((g,s,e,m),0)}",
                             file=sys.stderr
                         )
 
                 elif m in ("inframe_deletion", "delins"):
                     if confirm_indel(anc, iso, s, e, x):
-                        present_exact[(g, s, e, m)] = 1
+                        # Indel confirmation stored in present_any for output
+                        # as macse_indel_confirmed — separate from missense
+                        present_any[(g, s, e, m)] = 1
 
     # ============================================================
     # Output
+    # exact_missense: only populated for missense mutations
+    # any_missense:   only populated for missense mutations
+    # macse_indel_confirmed: only populated for inframe_deletion/delins
     # ============================================================
 
-    print("gene\taa_start\taa_end\tmutation_type\tpresent\tany_missense")
+    print("gene\taa_start\taa_end\tmutation_type\texact_missense\tany_missense\tmacse_indel_confirmed")
 
     for g, s, e, m, _ in MUTATIONS:
-        print(
-            f"{g}\t{s}\t{e}\t{m}\t"
-            f"{present_exact.get((g, s, e, m), 0)}\t"
-            f"{present_any.get((g, s, e, m), 0)}"
-        )
+        exact_missense        = present_exact.get((g,s,e,m), 0) if m == "missense" else 0
+        any_missense          = present_any.get((g,s,e,m), 0)   if m == "missense" else 0
+        macse_indel_confirmed = present_any.get((g,s,e,m), 0)   if m in ("inframe_deletion", "delins") else 0
+        print(f"{g}\t{s}\t{e}\t{m}\t{exact_missense}\t{any_missense}\t{macse_indel_confirmed}")
 
 
 # ============================================================

@@ -21,12 +21,15 @@ import sys
 
 def read_macse_hits(macse_file):
     """
-    Return two sets of (gene, aa_start, aa_end, mutation_type) keys:
-      - exact_hits:  present=1 (exact residue match for missense, or indel confirmed)
-      - any_hits:    any_missense=1 (any amino acid change at that position)
+    Read the MACSE mutation summary TSV.
+    Returns three sets of (gene, aa_start, aa_end, mutation_type) keys:
+      - exact_missense_hits:  exact_missense=1 (exact AA match at called position)
+      - any_missense_hits:    any_missense=1 (any AA change at called position)
+      - macse_indel_hits:     macse_indel_confirmed=1 (deletion confirmed in AA alignment)
     """
-    exact_hits = set()
-    any_hits   = set()
+    exact_missense_hits = set()
+    any_missense_hits   = set()
+    macse_indel_hits    = set()
     try:
         with open(macse_file) as fh:
             reader = csv.DictReader(fh, delimiter="\t")
@@ -38,15 +41,17 @@ def read_macse_hits(macse_file):
                         int(row["aa_end"]),
                         row["mutation_type"],
                     )
-                    if int(row.get("present", 0)):
-                        exact_hits.add(key)
+                    if int(row.get("exact_missense", 0)):
+                        exact_missense_hits.add(key)
                     if int(row.get("any_missense", 0)):
-                        any_hits.add(key)
+                        any_missense_hits.add(key)
+                    if int(row.get("macse_indel_confirmed", 0)):
+                        macse_indel_hits.add(key)
                 except (KeyError, ValueError):
                     continue
     except FileNotFoundError:
         print(f"WARNING: {macse_file} not found", file=sys.stderr)
-    return exact_hits, any_hits
+    return exact_missense_hits, any_missense_hits, macse_indel_hits
 
 
 def read_frameshift_hits(path):
@@ -193,7 +198,7 @@ REGIONAL_WINDOW = 20  # must match detect_frameshifts_macse.py and detect_stop_m
 
 
 def main(args):
-    macse_exact, macse_any               = read_macse_hits(args.macse)
+    exact_missense_hits, any_missense_hits, macse_indel_hits = read_macse_hits(args.macse)
     fs_exact, fs_regional, fs_gene       = read_frameshift_hits(args.frameshifts)
     ind_exact_del, ind_regional, ind_gene = read_indel_hits(args.indels)
     stop_exact, stop_regional, stop_gene  = read_stop_hits(args.stops)
@@ -203,7 +208,7 @@ def main(args):
     writer = csv.writer(out, delimiter="\t", lineterminator="\n")
     writer.writerow([
         "gene", "aa_start", "aa_end", "mutation_type",
-        "macse_strict", "macse_any_missense",
+        "exact_missense", "any_missense",
         "exact_frameshift", "regional_frameshift", "gene_frameshift",
         "exact_deletion", "regional_indel", "gene_indel",
         "exact_stop", "regional_stop", "gene_stop",
@@ -235,13 +240,9 @@ def main(args):
                 }.get(mut_type, mut_type)
                 macse_key = (gene, aa_start, aa_end, mut_type)
 
-                # MACSE: exact residue match or indel confirmed
-                macse_strict = int(macse_key in macse_exact)
-
-                # MACSE: any missense at that position (missense only)
-                macse_any_missense = int(
-                    mut_type == "missense" and macse_key in macse_any
-                )
+                # Missense tiers (missense only)
+                exact_missense = int(mut_type == "missense" and macse_key in exact_missense_hits)
+                any_missense   = int(mut_type == "missense" and macse_key in any_missense_hits)
 
                 # Frameshift tiers (frameshift mutations only)
                 is_fs = mut_type == "frameshift"
@@ -253,9 +254,14 @@ def main(args):
                                   and gene in fs_gene)
 
                 # Indel tiers (delins and inframe_deletion only)
+                # exact_deletion fires if EITHER detect_indels_macse.py OR
+                # scan_mutations_cds_macse.py confirmed the deletion
                 is_indel = mut_type in ("delins", "inframe_deletion")
                 centre   = (aa_start + aa_end) // 2
-                exact_del    = int(is_indel and (gene, centre) in ind_exact_del)
+                exact_del    = int(is_indel and (
+                                   (gene, centre) in ind_exact_del
+                                   or macse_key in macse_indel_hits
+                               ))
                 regional_ind = int(is_indel and not exact_del
                                    and gene in ind_regional)
                 gene_ind     = int(is_indel and not exact_del
@@ -272,7 +278,7 @@ def main(args):
                                     and gene in stop_gene)
 
                 final = int(bool(
-                    macse_strict or macse_any_missense
+                    exact_missense or any_missense
                     or exact_fs or regional_fs or gene_fs
                     or exact_del or regional_ind or gene_ind
                     or exact_stop or regional_stop or gene_stop
@@ -280,7 +286,7 @@ def main(args):
 
                 writer.writerow([
                     gene, aa_start, aa_end, mut_type,
-                    macse_strict, macse_any_missense,
+                    exact_missense, any_missense,
                     exact_fs, regional_fs, gene_fs,
                     exact_del, regional_ind, gene_ind,
                     exact_stop, regional_stop, gene_stop,

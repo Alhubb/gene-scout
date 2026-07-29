@@ -142,7 +142,7 @@ def main():
         sys.exit(0)
 
     with open(output_file, "w") as fh:
-        fh.write(f">{tname}:{start}-{end}({strand})\n{extracted}\n")
+        fh.write(f">{tname}:{start}-{end}({strand})\n{extracted.upper()}\n")
 
 
 if __name__ == "__main__":
