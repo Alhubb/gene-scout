@@ -191,16 +191,41 @@ def main():
             c0, c1 = get_alignment_columns(anc_seq, expected_start, expected_end)
 
             for rec in records[1:]:
-                iso_seq = str(rec.seq)
+                iso_seq  = str(rec.seq)
                 indel_pos = indel_positions_in_isolate(anc_seq, iso_seq)
 
+                # Compute ungapped lengths for length-based fallback.
+                # For deletions in homopolymeric runs, MACSE may produce a
+                # mismatch-based alignment rather than inserting an explicit
+                # gap character — in that case indel_pos will be empty even
+                # though the deletion is genuine. The length difference between
+                # ancestor and isolate ungapped AA sequences is a reliable
+                # independent signal in these cases.
+                anc_ungapped_len = get_gene_length(anc_seq)
+                iso_ungapped_len = get_gene_length(iso_seq)
+                length_diff      = anc_ungapped_len - iso_ungapped_len
+                expected_del     = expected_end - expected_start + 1
+
+                # LENGTH_TOLERANCE: allow ±1 residue from the expected
+                # deletion size to account for MACSE alignment noise.
+                LENGTH_TOLERANCE = 1
+                length_matches = abs(length_diff - expected_del) <= LENGTH_TOLERANCE
+
                 if not indel_pos:
+                    # No explicit gap found — fall back to length-based detection.
+                    # This handles deletions in homopolymeric amino acid runs where
+                    # MACSE aligns without inserting a gap character.
+                    if length_matches:
+                        # Assign regional tier — we know the deletion is the right
+                        # size but cannot confirm its exact position from the
+                        # alignment alone.
+                        results.append((gene, expected_centre, "regional", rec.id))
+                        tier2 += 1
                     continue
 
                 # Tier 1 — exact: gap overlaps the expected window
                 if c0 is not None:
                     iso_window = iso_seq[c0:c1]
-                    expected_del = expected_end - expected_start + 1
                     iso_gaps = sum(1 for a in iso_window if a in ("-", "!"))
                     anc_ungapped = sum(1 for a in anc_seq[c0:c1]
                                        if a not in ("-", "!"))
@@ -235,13 +260,23 @@ def main():
                             tier1 += 1
                             continue
 
-                # Tier 2 — regional: any gap within ±REGIONAL_WINDOW
+                # Tier 2 — regional: any gap within ±REGIONAL_WINDOW,
+                # OR length matches but gap is displaced (homopolymeric run)
                 regional = [(p, g) for p, g in indel_pos
                             if region_lo <= p <= region_hi]
                 if regional:
                     closest_pos = min(regional,
                                       key=lambda pg: abs(pg[0] - expected_centre))
                     results.append((gene, closest_pos[0], "regional", rec.id))
+                    tier2 += 1
+                    continue
+
+                # Length-based regional fallback: gap exists somewhere in the
+                # gene but outside the regional window, yet the total deletion
+                # size matches the expected event. The gap may have been placed
+                # far from the homopolymeric run by MACSE's global optimiser.
+                if length_matches:
+                    results.append((gene, expected_centre, "regional", rec.id))
                     tier2 += 1
                     continue
 
