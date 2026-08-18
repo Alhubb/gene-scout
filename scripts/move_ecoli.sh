@@ -1,17 +1,21 @@
 #!/bin/bash
-# FIX: Added set -euo pipefail. Without it, a failed mv (e.g. cross-filesystem
-# interruption) continues silently and the missing file is never flagged.
+
 set -euo pipefail
 
-SOURCE="/media/alasdair/External/3D_UHU/bakrep/ecoli"
-DEST="/media/alasdair/External/3D_UHU/bakrep/fasta"
+if [ "$#" -ne 2 ]; then
+    echo "Usage: bash move_ecoli.sh <source_dir> <dest_dir>" >&2
+    exit 1
+fi
+
+SOURCE="$1"
+DEST="$2"
+
+if [ ! -d "$SOURCE" ]; then
+    echo "ERROR: source directory not found: $SOURCE" >&2
+    exit 1
+fi
 
 mkdir -p "$DEST"
-
-# NOTE: This script deduplicates by *filename* only. Genome files with
-# different names but identical content will both be moved and processed
-# downstream. If you want to avoid redundant computation, run seqkit rmdup
-# or a checksum-based dedup on the assembled FASTA sequences after this step.
 
 find "$SOURCE" -type f -print0 | while IFS= read -r -d '' file; do
     filename=$(basename "$file")
@@ -25,9 +29,6 @@ find "$SOURCE" -type f -print0 | while IFS= read -r -d '' file; do
         done
         newname="${base}_${counter}.${ext}"
         echo "  Name collision: renaming to $newname"
-        # FIX: Use cp + rm (copy-then-delete) rather than bare mv so that a
-        # cross-filesystem transfer that is interrupted mid-way does not leave
-        # a half-written file in DEST with the source already deleted.
         cp "$file" "$DEST/$newname"
         rm "$file"
     else
